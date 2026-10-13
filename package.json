@@ -1,0 +1,27 @@
+{
+  "name": "@pmservers/discord-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that attaches to a Discord bot: debug, send messages, and let agents talk to each other.",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "discord-mcp": "dist/index.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/index.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "discord.js": "^14.27.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^3.2.0"
+  }
+}
