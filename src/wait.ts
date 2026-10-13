@@ -23,7 +23,7 @@ function fromOk(m: MessageView, from: WaitOptions["from"]): boolean {
 function isToMe(m: MessageView, o: WaitOptions): boolean {
   const to = m.agentMsg?.to?.toLowerCase();
   if (to !== undefined && o.selfNames.some((n) => n.toLowerCase() === to)) return true;
-  return m.content.includes(`<@${o.selfId}>`);
+  return m.content.includes(`<@${o.selfId}>`) || m.content.includes(`<@!${o.selfId}>`);
 }
 
 // True when m is a message the waiter should return.
@@ -38,6 +38,26 @@ export function matches(m: MessageView, o: WaitOptions): boolean {
 
 function oldest(list: MessageView[]): MessageView {
   return list.reduce((a, b) => (BigInt(b.id) < BigInt(a.id) ? b : a));
+}
+
+const PAGE_SIZE = 100;
+const MAX_BACKLOG_PAGES = 10;
+
+// Reads the backlog page by page, oldest first. Returns the oldest match, or undefined.
+async function findBacklogMatch(
+  discord: DiscordPort,
+  o: WaitOptions,
+  stopped: () => boolean,
+): Promise<MessageView | undefined> {
+  let after = o.after;
+  for (let page = 0; page < MAX_BACKLOG_PAGES && !stopped(); page++) {
+    const msgs = await discord.readMessages(o.channelId, { limit: PAGE_SIZE, after });
+    const hit = msgs.find((m) => matches(m, o));
+    if (hit) return hit;
+    if (msgs.length < PAGE_SIZE) break;
+    after = msgs[msgs.length - 1].id;
+  }
+  return undefined;
 }
 
 export function waitForMessage(discord: DiscordPort, o: WaitOptions): Promise<MessageView> {
@@ -83,12 +103,11 @@ export function waitForMessage(discord: DiscordPort, o: WaitOptions): Promise<Me
     });
 
     if (o.after !== undefined) {
-      discord
-        .readMessages(o.channelId, { limit: 100, after: o.after })
-        .then((backlog) => {
+      findBacklogMatch(discord, o, () => settled)
+        .then((hit) => {
           if (settled) return;
           backlogDone = true;
-          const candidates = [...backlog.filter((m) => matches(m, o)), ...buffer];
+          const candidates = hit ? [hit, ...buffer] : buffer;
           if (candidates.length > 0) settle(undefined, oldest(candidates));
         })
         .catch((err: unknown) => settle(err));

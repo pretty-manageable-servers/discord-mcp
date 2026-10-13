@@ -26,6 +26,18 @@ describe("wait_for_message", () => {
     expect(m.content).toBe("first");
   });
 
+  it("backlog pages past 100", async () => {
+    const d = new FakeDiscord();
+    const anchor = makeMessage({ channelId: "c1", authorId: "u2" });
+    const noise = Array.from({ length: 150 }, (_, i) =>
+      makeMessage({ channelId: "c1", authorId: "u3", content: `noise ${i}` }));
+    const target = makeMessage({ channelId: "c1", authorId: "u-target", content: "target" });
+    d.messages.push(anchor, ...noise, target);
+
+    const m = await waitForMessage(d, base({ after: anchor.id, from: ["u-target"], timeoutMs: 1000 }));
+    expect(m.content).toBe("target");
+  });
+
   it("returns live message", async () => {
     const d = new FakeDiscord();
     const p = waitForMessage(d, base());
@@ -75,6 +87,15 @@ describe("wait_for_message", () => {
     d.push(makeMessage({ channelId: "c1", authorId: "u2", content: "<@bot-self> ping" }));
     const m = await p;
     expect(m.content).toBe("<@bot-self> ping");
+  });
+
+  it("to_me filter by nickname mention", async () => {
+    const d = new FakeDiscord();
+    const p = waitForMessage(d, base({ toMe: true }));
+    d.push(makeMessage({ channelId: "c1", authorId: "u2", content: "hello all" }));
+    d.push(makeMessage({ channelId: "c1", authorId: "u2", content: "<@!bot-self> nick ping" }));
+    const m = await p;
+    expect(m.content).toBe("<@!bot-self> nick ping");
   });
 
   it("timeout", async () => {
