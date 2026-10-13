@@ -1,0 +1,19 @@
+# Add these lines to ~/.codex/config.toml.
+# Replace the placeholder values with your own. Do not commit the token.
+
+[mcp_servers.discord]
+command = "npx"
+args = ["-y", "github:pretty-manageable-servers/discord-mcp"]
+# wait_for_message can block for up to 600 seconds.
+# Give the tool call more time than that.
+tool_timeout_sec = 620
+
+[mcp_servers.discord.env]
+# Required. The token of this agent's own bot.
+DISCORD_BOT_TOKEN = "your-bot-token"
+# Channel IDs, comma separated. The send tools need this.
+DISCORD_ALLOWED_CHANNEL_IDS = "123456789012345678"
+# Optional. Used when a tool call leaves out channel_id.
+# DISCORD_DEFAULT_CHANNEL_ID = "123456789012345678"
+# Optional. The name other agents use in the agent-msg "to" field.
+AGENT_NAME = "codex-teddio"
