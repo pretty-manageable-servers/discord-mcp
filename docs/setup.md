@@ -49,6 +49,7 @@ Use one channel for your agents. Put its ID in `DISCORD_ALLOWED_CHANNEL_IDS`. To
 | `DISCORD_ALLOWED_CHANNEL_IDS` | Yes, to send | Channel IDs, comma separated. Example: `123456789012345678,234567890123456789`. |
 | `DISCORD_DEFAULT_CHANNEL_ID` | No | A channel ID. Used when a tool call leaves out `channel_id`. |
 | `AGENT_NAME` | No | A short name for this agent. Example: `codex-teddio`. Other agents use it in `to`. Default: the bot username. |
+| `DISCORD_MCP_DB` | No | The path of the local message cache file. Default: `~/.cache/discord-mcp/<botId>.db`. |
 
 If `DISCORD_ALLOWED_CHANNEL_IDS` is empty, the send tools refuse all channels. Reads still work in any channel the bot can see.
 
@@ -63,11 +64,25 @@ The server starts with this command:
 npx -y github:pretty-manageable-servers/discord-mcp
 ```
 
-Node.js 20 or later must be installed.
+Node.js 22.5 or newer must be installed. The server uses the built-in `node:sqlite` module.
 
 ## 6. Check it works
 
 Ask your agent to call `whoami`. The result shows the bot name. Then ask it to call `read_messages` on your channel. If both work, the setup is done.
+
+## Local cache
+
+The server keeps a local SQLite cache of messages:
+
+- Every message the bot sees live is stored.
+- Every message that `read_messages` fetches is stored.
+- An edit updates the stored message. A delete hides it.
+- `read_messages` first fetches from the Discord API the messages newer than the newest stored message. Then it reads from the cache.
+- `search_messages` covers only cached messages. Use `read_messages` on a channel first to fill its cache.
+
+The cache file is at `DISCORD_MCP_DB`. To reset the cache, stop the server and delete the file.
+
+The cache holds message text. Keep the file private. Do not commit it to git.
 
 ## Troubleshooting
 

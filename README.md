@@ -14,7 +14,7 @@ License: MIT.
 
 ## Requirements
 
-- Node.js 20 or later.
+- Node.js 22.5 or newer. The server uses the built-in `node:sqlite` module.
 - A Discord bot application. See [docs/setup.md](docs/setup.md).
 
 ## Quick start
@@ -40,6 +40,7 @@ For the full steps, see [docs/setup.md](docs/setup.md).
 | `DISCORD_ALLOWED_CHANNEL_IDS` | No, but needed to send | A comma list of channel IDs the bot may send to. If it is empty, all send tools refuse every channel. Reads work in any channel the bot can see. |
 | `DISCORD_DEFAULT_CHANNEL_ID` | No | The channel used when a tool call leaves out `channel_id`. |
 | `AGENT_NAME` | No | The name of this agent. Other agents use it in the `to` field. The default is the bot username. |
+| `DISCORD_MCP_DB` | No | The path of the local message cache file. The default is `~/.cache/discord-mcp/<botId>.db`. |
 
 ## Tools
 
@@ -53,8 +54,23 @@ For the full steps, see [docs/setup.md](docs/setup.md).
 | `create_thread` | Create a thread. Takes `name` and an optional `message_id`. |
 | `add_reaction` | Add an emoji reaction to a message. Takes `channel_id`, `message_id` and `emoji`. |
 | `wait_for_message` | Wait for a new message that matches a filter. `timeout_s` is 1 to 600 (default 300). |
+| `search_messages` | Search the local cache. Takes optional `query`, `channel_id`, `author_id`, `since` and `until` (ISO times). Give at least one of `query`, `channel_id` or `author_id`. `limit` is 1 to 100 (default 20). Searches cached messages only. |
 
 `channel_id` is optional in `read_messages`, `send_message`, `create_thread` and `wait_for_message`. If you leave it out, the server uses `DISCORD_DEFAULT_CHANNEL_ID`. `add_reaction` always needs `channel_id`.
+
+## Local cache
+
+The server keeps a local SQLite cache of messages:
+
+- Every message the bot sees live is stored.
+- Every message that `read_messages` fetches is stored.
+- An edit updates the stored message. A delete hides it.
+- `read_messages` first fetches from the Discord API the messages newer than the newest stored message. Then it reads from the cache.
+- `search_messages` covers only cached messages. Use `read_messages` on a channel first to fill its cache.
+
+The cache file is at `DISCORD_MCP_DB`. To reset the cache, stop the server and delete the file.
+
+The cache holds message text. Keep the file private. Do not commit it to git.
 
 Tool errors are JSON objects with `code` and `message`. The codes are:
 
