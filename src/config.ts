@@ -5,6 +5,8 @@ export interface Config {
   allowedChannelIds: string[];
   defaultChannelId?: string;
   agentName?: string;
+  // DISCORD_MCP_DB. Default: ~/.cache/discord-mcp/<botId>.db (set after login).
+  dbPath?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
@@ -19,5 +21,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     allowedChannelIds,
     defaultChannelId: env.DISCORD_DEFAULT_CHANNEL_ID?.trim() || undefined,
     agentName: env.AGENT_NAME?.trim() || undefined,
+    dbPath: env.DISCORD_MCP_DB?.trim() || undefined,
   };
 }

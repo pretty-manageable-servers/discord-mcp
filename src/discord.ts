@@ -5,6 +5,8 @@ import {
   Events,
   GatewayIntentBits,
   type Message,
+  type PartialMessage,
+  Partials,
 } from "discord.js";
 import { ToolError } from "./errors.js";
 import { parseAgentMsg } from "./parse.js";
@@ -71,6 +73,8 @@ export function createDiscord(token: string): DiscordPort {
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
     ],
+    // Edits and deletes of messages sent before this process started arrive as partials.
+    partials: [Partials.Message, Partials.Channel],
   });
   client.on(Events.Error, (err) => log("client error:", err.message));
   client.on(Events.Warn, (msg) => log("warn:", msg));
@@ -176,6 +180,28 @@ export function createDiscord(token: string): DiscordPort {
       client.on(Events.MessageCreate, handler);
       return () => {
         client.off(Events.MessageCreate, handler);
+      };
+    },
+
+    onMessageUpdate(cb) {
+      const handler = async (_old: unknown, m: Message | PartialMessage) => {
+        try {
+          cb(toView(m.partial ? await m.fetch() : m));
+        } catch (err) {
+          console.error("message update failed:", err instanceof Error ? err.message : err);
+        }
+      };
+      client.on(Events.MessageUpdate, handler);
+      return () => {
+        client.off(Events.MessageUpdate, handler);
+      };
+    },
+
+    onMessageDelete(cb) {
+      const handler = (m: Message | PartialMessage) => cb({ channelId: m.channelId, id: m.id });
+      client.on(Events.MessageDelete, handler);
+      return () => {
+        client.off(Events.MessageDelete, handler);
       };
     },
   };

@@ -12,4 +12,8 @@ export interface DiscordPort {
   react(channelId: string, messageId: string, emoji: string): Promise<void>;
   // Returns a function that removes the listener.
   onMessage(cb: (m: MessageView) => void): () => void;
+  // Edited message (full new view). Returns a function that removes the listener.
+  onMessageUpdate(cb: (m: MessageView) => void): () => void;
+  // Deleted message. Returns a function that removes the listener.
+  onMessageDelete(cb: (ref: { channelId: string; id: string }) => void): () => void;
 }

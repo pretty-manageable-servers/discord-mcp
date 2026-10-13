@@ -26,12 +26,16 @@ export class FakeDiscord implements DiscordPort {
   reactions: { channelId: string; messageId: string; emoji: string }[] = [];
   threads: { channelId: string; name: string; messageId?: string; id: string }[] = [];
   private listeners = new Set<(m: MessageView) => void>();
+  private updateListeners = new Set<(m: MessageView) => void>();
+  private deleteListeners = new Set<(ref: { channelId: string; id: string }) => void>();
+  apiReads = 0;
 
   async ready() { return { botId: this.botId, botName: this.botName }; }
   async listGuilds() { return this.guilds; }
   async listChannels(guildId: string) { return this.channels[guildId] ?? []; }
 
   async readMessages(channelId: string, opts: { limit: number; after?: string; before?: string }) {
+    this.apiReads++;
     let list = this.messages.filter((m) => m.channelId === channelId);
     if (opts.after) list = list.filter((m) => BigInt(m.id) > BigInt(opts.after!));
     if (opts.before) list = list.filter((m) => BigInt(m.id) < BigInt(opts.before!));
@@ -63,7 +67,33 @@ export class FakeDiscord implements DiscordPort {
     return () => { this.listeners.delete(cb); };
   }
 
+  onMessageUpdate(cb: (m: MessageView) => void) {
+    this.updateListeners.add(cb);
+    return () => { this.updateListeners.delete(cb); };
+  }
+
+  onMessageDelete(cb: (ref: { channelId: string; id: string }) => void) {
+    this.deleteListeners.add(cb);
+    return () => { this.deleteListeners.delete(cb); };
+  }
+
   listenerCount() { return this.listeners.size; }
+
+  // Change a stored message and tell update listeners.
+  edit(id: string, content: string) {
+    const m = this.messages.find((x) => x.id === id);
+    if (!m) throw new Error("no message " + id);
+    m.content = content;
+    for (const cb of [...this.updateListeners]) cb({ ...m });
+  }
+
+  // Remove a message and tell delete listeners.
+  remove(id: string) {
+    const i = this.messages.findIndex((x) => x.id === id);
+    if (i < 0) throw new Error("no message " + id);
+    const [m] = this.messages.splice(i, 1);
+    for (const cb of [...this.deleteListeners]) cb({ channelId: m.channelId, id: m.id });
+  }
 
   // Store a message and tell all listeners, like a gateway event.
   push(m: MessageView) {
