@@ -25,6 +25,10 @@ class FakeStore implements MessageStore {
   newestId(): string | null { throw new Error("not used"); }
   isSynced(): boolean { throw new Error("not used"); }
   markSynced(): void { throw new Error("not used"); }
+  addGap(): void {}
+  gaps(): { afterId: string; beforeId: string }[] { return []; }
+  removeGap(): void {}
+  idsFrom(): string[] { return []; }
   close(): void {}
 }
 

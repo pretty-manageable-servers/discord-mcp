@@ -151,3 +151,102 @@ describe("cached port", () => {
     expect(fake.apiReads).toBe(1);
   });
 });
+
+describe("re-check and gaps", () => {
+  // Store holds one synced message. The fake gets `count` newer messages, added with no events.
+  function seedCapped(count: number) {
+    const fake = new FakeDiscord();
+    const seed = makeMessage({ channelId: "c1", content: "seed" });
+    fake.messages.push(seed);
+    const store = new MemoryStore();
+    store.upsert(seed);
+    store.markSynced("c1");
+    const newer = Array.from({ length: count }, (_, i) => makeMessage({ channelId: "c1", content: `n${i}` }));
+    fake.messages.push(...newer);
+    return { fake, store, newer };
+  }
+
+  it("recheck updates edited text", async () => {
+    const fake = new FakeDiscord();
+    const m = makeMessage({ channelId: "c1", content: "old text" });
+    fake.messages.push(m);
+    const store = new MemoryStore();
+    await withCache(fake, store).readMessages("c1", { limit: 20 });
+
+    // Edited while no process was watching. Change the fake with no events.
+    m.content = "new text";
+
+    const read = await withCache(fake, store).readMessages("c1", { limit: 20 });
+
+    expect(read.map((x) => x.content)).toEqual(["new text"]);
+    expect(store.range("c1", { limit: 10 }).map((x) => x.content)).toEqual(["new text"]);
+  });
+
+  it("recheck marks missing as deleted", async () => {
+    const fake = new FakeDiscord();
+    const gone = makeMessage({ channelId: "c1", content: "a" });
+    const kept = makeMessage({ channelId: "c1", content: "b" });
+    const last = makeMessage({ channelId: "c1", content: "c" });
+    fake.messages.push(gone, kept, last);
+    const store = new MemoryStore();
+    await withCache(fake, store).readMessages("c1", { limit: 20 });
+
+    // Deleted while no process was watching. The oldest message goes, so the check must cover the whole channel.
+    fake.messages.splice(0, 1);
+
+    const read = await withCache(fake, store).readMessages("c1", { limit: 20 });
+
+    expect(read.map((x) => x.content)).toEqual(["b", "c"]);
+    expect(store.range("c1", { limit: 10 }).map((x) => x.id)).toEqual([kept.id, last.id]);
+  });
+
+  it("capped catch up records gap", async () => {
+    const { fake, store, newer } = seedCapped(1150);
+    const port = withCache(fake, store);
+
+    await port.readMessages("c1", { limit: 20 });
+
+    // Paging stopped after 1000 messages. The newest 100 start at newer[1050].
+    expect(store.gaps("c1")).toEqual([{ afterId: newer[999]!.id, beforeId: newer[1050]!.id }]);
+  });
+
+  it("read in gap uses api and shrinks gap", async () => {
+    const { fake, store, newer } = seedCapped(1150);
+    const port = withCache(fake, store);
+    await port.readMessages("c1", { limit: 20 });
+    const reads = fake.apiReads;
+
+    const page = await port.readMessages("c1", { limit: 20, after: newer[999]!.id });
+
+    expect(fake.apiReads).toBe(reads + 1);
+    const expected = Array.from({ length: 20 }, (_, i) => `n${1000 + i}`);
+    expect(page.map((m) => m.content)).toEqual(expected);
+    expect(store.range("c1", { limit: 20, after: newer[999]!.id }).map((m) => m.content)).toEqual(expected);
+    // The page covered the start of the gap, so the gap now starts at its last id.
+    expect(store.gaps("c1")).toEqual([{ afterId: newer[1019]!.id, beforeId: newer[1050]!.id }]);
+  });
+
+  it("read covering whole gap removes it", async () => {
+    const { fake, store, newer } = seedCapped(1150);
+    const port = withCache(fake, store);
+    await port.readMessages("c1", { limit: 20 });
+
+    const page = await port.readMessages("c1", { limit: 100, after: newer[999]!.id });
+
+    expect(page).toHaveLength(100);
+    expect(page[99]!.content).toBe("n1099");
+    expect(store.gaps("c1")).toEqual([]);
+  });
+
+  it("no gap when not capped", async () => {
+    // 250 new messages: two full pages and a short one, so paging is not capped.
+    const { fake, store } = seedCapped(250);
+    const port = withCache(fake, store);
+
+    const read = await port.readMessages("c1", { limit: 20 });
+
+    expect(read).toHaveLength(20);
+    expect(store.range("c1", { limit: 1000 })).toHaveLength(251);
+    expect(store.gaps("c1")).toEqual([]);
+  });
+});

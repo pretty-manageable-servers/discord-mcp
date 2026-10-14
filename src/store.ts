@@ -25,6 +25,12 @@ export interface MessageStore {
   newestId(channelId: string): string | null;
   isSynced(channelId: string): boolean;
   markSynced(channelId: string): void;
+  // Missing id ranges (exclusive bounds) in a channel's cache.
+  addGap(channelId: string, afterId: string, beforeId: string): void;
+  gaps(channelId: string): { afterId: string; beforeId: string }[];   // ordered by afterId
+  removeGap(channelId: string, afterId: string, beforeId: string): void;
+  // Ids of stored, not-deleted rows with channel_id = channelId and id_num >= fromId (numeric).
+  idsFrom(channelId: string, fromId: string): string[];
   // Not deleted, newest first.
   search(q: SearchQuery): MessageView[];
   close(): void;
@@ -69,7 +75,8 @@ CREATE TABLE IF NOT EXISTS messages (
   deleted INTEGER NOT NULL DEFAULT 0,
   edited_at TEXT
 );
-CREATE INDEX IF NOT EXISTS messages_channel_id ON messages(channel_id, id);
+DROP INDEX IF EXISTS messages_channel_id;
+CREATE INDEX IF NOT EXISTS messages_channel_id_num ON messages(channel_id, id_num);
 CREATE INDEX IF NOT EXISTS messages_thread_id ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS messages_author_id ON messages(author_id);
 CREATE INDEX IF NOT EXISTS messages_created_at ON messages(created_at);
@@ -88,11 +95,20 @@ CREATE TABLE IF NOT EXISTS sync (
   channel_id TEXT PRIMARY KEY,
   synced_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gaps (
+  channel_id TEXT NOT NULL,
+  after_num INTEGER NOT NULL,
+  before_num INTEGER NOT NULL,
+  after_id TEXT NOT NULL,
+  before_id TEXT NOT NULL,
+  PRIMARY KEY(channel_id, after_num, before_num)
+);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT INTO meta (key, value) VALUES ('schema_version', '1') ON CONFLICT(key) DO NOTHING;
+INSERT INTO meta (key, value) VALUES ('schema_version', '2')
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 `;
 
 const UPSERT_SQL = `
@@ -237,6 +253,37 @@ export function openStore(path: string): MessageStore {
         `INSERT INTO sync (channel_id, synced_at) VALUES (?, ?)
          ON CONFLICT(channel_id) DO UPDATE SET synced_at = excluded.synced_at`,
       ).run(channelId, new Date().toISOString());
+    },
+
+    addGap(channelId, afterId, beforeId) {
+      db.prepare(
+        `INSERT INTO gaps (channel_id, after_num, before_num, after_id, before_id) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(channel_id, after_num, before_num) DO NOTHING`,
+      ).run(channelId, BigInt(afterId), BigInt(beforeId), afterId, beforeId);
+    },
+
+    gaps(channelId) {
+      const rows = db
+        .prepare("SELECT after_id, before_id FROM gaps WHERE channel_id = ? ORDER BY after_num ASC")
+        .all(channelId) as unknown as { after_id: string; before_id: string }[];
+      return rows.map((r) => ({ afterId: r.after_id, beforeId: r.before_id }));
+    },
+
+    removeGap(channelId, afterId, beforeId) {
+      db.prepare("DELETE FROM gaps WHERE channel_id = ? AND after_num = ? AND before_num = ?").run(
+        channelId,
+        BigInt(afterId),
+        BigInt(beforeId),
+      );
+    },
+
+    idsFrom(channelId, fromId) {
+      const rows = db
+        .prepare(
+          "SELECT m.id FROM messages m WHERE m.channel_id = ? AND m.id_num >= ? AND m.deleted = 0 ORDER BY m.id_num ASC",
+        )
+        .all(channelId, BigInt(fromId)) as unknown as { id: string }[];
+      return rows.map((r) => r.id);
     },
 
     search(q) {
