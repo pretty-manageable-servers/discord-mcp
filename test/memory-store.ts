@@ -10,9 +10,12 @@ interface Row {
 export class MemoryStore implements MessageStore {
   private rows = new Map<string, Row>();
   private synced = new Set<string>();
+  private gapRows: { channelId: string; afterId: string; beforeId: string }[] = [];
 
+  // Like SQLite: a stored delete stays, even when the same id is upserted again.
   upsert(m: MessageView): void {
-    this.rows.set(m.id, { m: { ...m }, deleted: false });
+    const old = this.rows.get(m.id);
+    this.rows.set(m.id, { m: { ...m }, deleted: old?.deleted ?? false });
   }
 
   upsertMany(list: MessageView[]): void {
@@ -49,6 +52,40 @@ export class MemoryStore implements MessageStore {
 
   markSynced(channelId: string): void {
     this.synced.add(channelId);
+  }
+
+  addGap(channelId: string, afterId: string, beforeId: string): void {
+    if (this.findGap(channelId, afterId, beforeId) >= 0) return;
+    this.gapRows.push({ channelId, afterId, beforeId });
+  }
+
+  gaps(channelId: string): { afterId: string; beforeId: string }[] {
+    return this.gapRows
+      .filter((g) => g.channelId === channelId)
+      .sort((a, b) => (BigInt(a.afterId) < BigInt(b.afterId) ? -1 : 1))
+      .map((g) => ({ afterId: g.afterId, beforeId: g.beforeId }));
+  }
+
+  removeGap(channelId: string, afterId: string, beforeId: string): void {
+    const i = this.findGap(channelId, afterId, beforeId);
+    if (i >= 0) this.gapRows.splice(i, 1);
+  }
+
+  // Same rules as the SQLite store: stored, not deleted, numeric id order.
+  idsFrom(channelId: string, fromId: string): string[] {
+    return this.live()
+      .filter((m) => m.channelId === channelId && BigInt(m.id) >= BigInt(fromId))
+      .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1))
+      .map((m) => m.id);
+  }
+
+  private findGap(channelId: string, afterId: string, beforeId: string): number {
+    return this.gapRows.findIndex(
+      (g) =>
+        g.channelId === channelId &&
+        BigInt(g.afterId) === BigInt(afterId) &&
+        BigInt(g.beforeId) === BigInt(beforeId),
+    );
   }
 
   // Newest first. Substring match on text.

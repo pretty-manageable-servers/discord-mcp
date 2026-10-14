@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type MessageStore, openStore } from "../src/store.js";
 import type { MessageView } from "../src/types.js";
@@ -144,6 +145,84 @@ it("file db creates directory", () => {
       expect(reopened.range("c1", { limit: 10 })[0]!.content).toBe("persisted");
     } finally {
       reopened.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("gaps add list remove", () => {
+  store.addGap("c1", "20", "50");
+  store.addGap("c1", "5", "9");
+  store.addGap("c1", "5", "9"); // same gap twice is stored once
+  store.addGap("c2", "1", "2");
+  // Ordered by afterId, numeric.
+  expect(store.gaps("c1")).toEqual([
+    { afterId: "5", beforeId: "9" },
+    { afterId: "20", beforeId: "50" },
+  ]);
+  store.removeGap("c1", "5", "9");
+  expect(store.gaps("c1")).toEqual([{ afterId: "20", beforeId: "50" }]);
+  store.removeGap("c1", "5", "9"); // missing gap is a no-op
+  expect(store.gaps("c2")).toEqual([{ afterId: "1", beforeId: "2" }]);
+});
+
+it("idsFrom numeric", () => {
+  store.upsertMany([
+    msg({ id: "9" }),
+    msg({ id: "10" }),
+    msg({ id: "100" }),
+    msg({ id: "99", channelId: "c2" }),
+  ]);
+  // Numeric order: "10" and "100" are >= "9" in numbers, but not as strings.
+  expect(store.idsFrom("c1", "9")).toEqual(["9", "10", "100"]);
+  expect(store.idsFrom("c1", "10")).toEqual(["10", "100"]);
+  // Other channels are excluded.
+  expect(store.idsFrom("c2", "1")).toEqual(["99"]);
+  // Deleted rows are excluded.
+  store.markDeleted("c1", "10");
+  expect(store.idsFrom("c1", "9")).toEqual(["9", "100"]);
+});
+
+it("v1 file upgrades to v2", () => {
+  const dir = mkdtempSync(join(tmpdir(), "wp7-"));
+  const path = join(dir, "cache.db");
+  try {
+    const first = openStore(path);
+    first.upsert(msg({ id: "1", content: "old file" }));
+    first.close();
+
+    // Make the file look like schema v1: no gaps table, old channel index, version 1.
+    const raw = new DatabaseSync(path);
+    raw.exec(`
+      DROP TABLE gaps;
+      DROP INDEX messages_channel_id_num;
+      CREATE INDEX messages_channel_id ON messages(channel_id, id);
+      UPDATE meta SET value = '1' WHERE key = 'schema_version';
+    `);
+    raw.close();
+
+    const upgraded = openStore(path);
+    try {
+      upgraded.addGap("c1", "1", "5");
+      expect(upgraded.gaps("c1")).toEqual([{ afterId: "1", beforeId: "5" }]);
+      expect(upgraded.range("c1", { limit: 10 })[0]!.content).toBe("old file");
+    } finally {
+      upgraded.close();
+    }
+
+    const check = new DatabaseSync(path);
+    try {
+      const version = check.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as {
+        value: string;
+      };
+      expect(version.value).toBe("2");
+      const oldIndex = check.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'messages_channel_id'",
+      ).get();
+      expect(oldIndex).toBeUndefined();
+    } finally {
+      check.close();
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
