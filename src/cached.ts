@@ -221,6 +221,7 @@ export function withCache(inner: DiscordPort, store: MessageStore): DiscordPort 
     onMessage: (cb) => inner.onMessage(cb),
     onMessageUpdate: (cb) => inner.onMessageUpdate(cb),
     onMessageDelete: (cb) => inner.onMessageDelete(cb),
+    onStatus: (cb) => inner.onStatus(cb),
     destroy: () => inner.destroy(),
   };
 }

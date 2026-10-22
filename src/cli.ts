@@ -6,6 +6,7 @@ import { z } from "zod";
 import { withCache } from "./cached.js";
 import { loadConfig, type Config } from "./config.js";
 import { createDiscord, type Logger } from "./discord.js";
+import { messageLine } from "./format.js";
 import { ConfigError, ToolError } from "./errors.js";
 import type { DiscordPort } from "./port.js";
 import { openStore, type MessageStore } from "./store.js";
@@ -21,6 +22,7 @@ import {
 } from "./tools/write.js";
 import { waitFor, waitForMessageInput, whoami } from "./tools/agent.js";
 import { searchMessages, searchMessagesInput } from "./tools/search.js";
+import { runWatch, WATCH_EVENTS, type WatchEvent, type WatchOptions } from "./watch.js";
 
 // A connected Discord port and cache. close() disconnects and closes the store.
 export interface Session {
@@ -68,10 +70,13 @@ interface RunCtx {
   discord: DiscordPort;
   config: Config;
   store?: MessageStore;
+  // Streams output for long-running commands (watch). Other commands return their output.
+  out: (text: string) => void;
 }
 
 interface Output {
-  json: unknown;
+  // undefined: the command printed its own output.
+  json?: unknown;
   text: string;
 }
 
@@ -97,6 +102,37 @@ const GLOBAL_OPTIONS = {
 const MAX_CHARS = { "max-chars": { type: "string" } } as const;
 const FILTER_KEYWORDS = ["bots", "humans", "all"];
 
+function strs(v: Values[string]): string[] {
+  return (v as string[] | undefined) ?? [];
+}
+
+// A whole number of 1 or more, or undefined when the flag is absent.
+function positiveInt(v: Values[string], flag: string): number | undefined {
+  const raw = str(v);
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new UsageError(`--${flag} must be a whole number, 1 or more`);
+  return n;
+}
+
+// --events: a comma list of new, edit and delete. Default: new,edit.
+function watchEvents(raw: string | undefined): WatchEvent[] {
+  if (raw === undefined) return ["new", "edit"];
+  const names = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const bad = names.filter((n) => !(WATCH_EVENTS as readonly string[]).includes(n));
+  if (names.length === 0 || bad.length > 0) throw new UsageError("--events takes new, edit and delete, comma separated");
+  return [...new Set(names)] as WatchEvent[];
+}
+
+// The server of a channel, found from the servers and channels the bot can see.
+async function guildOfChannel(ctx: RunCtx, channelId: string): Promise<string> {
+  for (const g of await ctx.discord.listGuilds()) {
+    const channels = await ctx.discord.listChannels(g.id);
+    if (channels.some((c) => c.id === channelId)) return g.id;
+  }
+  throw new ToolError("not_found", `channel ${channelId} is not in a server the bot can see`);
+}
+
 function str(v: Values[string]): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
@@ -111,16 +147,6 @@ function maxChars(values: Values): number | undefined {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1) throw new UsageError("--max-chars must be a whole number, 1 or more");
   return n;
-}
-
-function messageLine(m: MessageView, limit?: number): string {
-  let text = m.content;
-  if (limit !== undefined && text.length > limit) text = `${text.slice(0, limit)}…`;
-  const author = m.authorIsBot ? `${m.authorName} [bot]` : m.authorName;
-  let line = `${m.id} ${m.createdAt.slice(11, 16)} UTC ${author}: ${text.replace(/\r?\n/g, "⏎")}`;
-  if (m.attachments.length > 0) line += ` [files: ${m.attachments.map((a) => a.name).join(", ")}]`;
-  if (m.replyToId) line += ` ↩${m.replyToId}`;
-  return line;
 }
 
 function messagesOutput(list: MessageView[], limit?: number): Output {
@@ -323,6 +349,68 @@ export const COMMANDS: Record<string, Command> = {
     },
   },
 
+  watch: {
+    summary:
+      "Stream new, edited and deleted messages, one line each, until stopped. " +
+      "Edits of one message are coalesced to one line per 3 seconds. With --json, one JSON object per line.",
+    usage:
+      "watch [--channel <id>]... [--guild <id>] [--from <userId>]... [--bots-only | --no-bots] " +
+      "[--contains <text>] [--events new,edit,delete] [--max-chars N] [--until-idle <seconds>] [--exit-after <count>]",
+    options: {
+      channel: { type: "string", multiple: true },
+      guild: { type: "string" },
+      from: { type: "string", multiple: true },
+      "bots-only": { type: "boolean" },
+      "no-bots": { type: "boolean" },
+      contains: { type: "string" },
+      events: { type: "string" },
+      ...MAX_CHARS,
+      "until-idle": { type: "string" },
+      "exit-after": { type: "string" },
+    },
+    validate(v) {
+      if (v["bots-only"] === true && v["no-bots"] === true) {
+        throw new UsageError("--bots-only and --no-bots cannot be used together");
+      }
+      watchEvents(str(v.events));
+      positiveInt(v["until-idle"], "until-idle");
+      positiveInt(v["exit-after"], "exit-after");
+    },
+    async run(v, ctx) {
+      const channelIds = strs(v.channel);
+      let guildId = str(v.guild);
+      // No channel and no server: the server of DISCORD_DEFAULT_CHANNEL_ID, when it is set.
+      if (channelIds.length === 0 && guildId === undefined && ctx.config.defaultChannelId) {
+        guildId = await guildOfChannel(ctx, ctx.config.defaultChannelId);
+      }
+      const untilIdle = positiveInt(v["until-idle"], "until-idle");
+      const opts: WatchOptions = {
+        channelIds: channelIds.length > 0 ? channelIds : undefined,
+        guildId,
+        fromIds: strs(v.from),
+        bots: v["bots-only"] === true ? "only" : v["no-bots"] === true ? "none" : undefined,
+        contains: str(v.contains),
+        events: watchEvents(str(v.events)),
+        maxChars: maxChars(v),
+        untilIdleMs: untilIdle === undefined ? undefined : untilIdle * 1000,
+        exitAfter: positiveInt(v["exit-after"], "exit-after"),
+        json: v.json === true,
+      };
+      // SIGINT and SIGTERM end the watch. The caller then closes the port and the store.
+      const stop = new AbortController();
+      const onSignal = () => stop.abort();
+      process.once("SIGINT", onSignal);
+      process.once("SIGTERM", onSignal);
+      try {
+        await runWatch(opts, { port: ctx.discord, out: ctx.out, signal: stop.signal });
+      } finally {
+        process.off("SIGINT", onSignal);
+        process.off("SIGTERM", onSignal);
+      }
+      return { text: "" };
+    },
+  },
+
   search: {
     summary: "Search the local message cache. Searches only messages this bot has seen or read.",
     usage:
@@ -480,9 +568,10 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
       port = session.port;
       store = session.store;
     }
-    const result = await command.run(values, { discord: port, config, store });
-    if (json) out(`${JSON.stringify(result.json, null, 2)}\n`);
-    else if (result.text !== "") out(`${result.text}\n`);
+    const result = await command.run(values, { discord: port, config, store, out });
+    if (json) {
+      if (result.json !== undefined) out(`${JSON.stringify(result.json, null, 2)}\n`);
+    } else if (result.text !== "") out(`${result.text}\n`);
     return 0;
   } catch (e) {
     if (e instanceof UsageError) return usageError(e.message, name);
