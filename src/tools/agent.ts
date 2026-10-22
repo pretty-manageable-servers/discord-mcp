@@ -1,18 +1,61 @@
 import { z } from "zod";
-import type { ToolContext } from "./context.js";
-import { ok, fail, pickChannel } from "./context.js";
+import type { ToolContext, ToolDeps } from "./context.js";
+import { fail, ok, pickChannel } from "./context.js";
 import { waitForMessage } from "../wait.js";
+import type { MessageView } from "../types.js";
+
+export const waitForMessageShape = {
+  channel_id: z.string().optional().describe("Channel or thread id. Default: DISCORD_DEFAULT_CHANNEL_ID."),
+  after: z.string().regex(/^\d+$/, "after must be a message id").optional()
+    .describe("Only return messages newer than this message id."),
+  from: z.union([z.enum(["bots", "humans", "all"]), z.array(z.string())]).default("all")
+    .describe("Author filter: bots, humans, all, or a list of author ids."),
+  to_me: z.boolean().default(false)
+    .describe("Only return messages addressed to this agent (agent-msg to, or a mention of this bot)."),
+  contains: z.string().min(1).optional()
+    .describe("Only return messages whose text includes this string."),
+  timeout_s: z.number().int().min(1).max(600).default(300)
+    .describe("Seconds to wait before returning code timeout."),
+};
+
+export const waitForMessageInput = z.object(waitForMessageShape);
+export type WaitForMessageInput = z.infer<typeof waitForMessageInput>;
+
+export async function whoami(deps: ToolDeps): Promise<{ botId: string; botName: string; agentName: string }> {
+  const me = await deps.discord.ready();
+  return { botId: me.botId, botName: me.botName, agentName: deps.config.agentName ?? me.botName };
+}
+
+export async function waitFor(
+  deps: ToolDeps,
+  input: WaitForMessageInput,
+  signal?: AbortSignal,
+): Promise<MessageView> {
+  const channelId = pickChannel(deps.config, input.channel_id);
+  const me = await deps.discord.ready();
+  const selfNames = [deps.config.agentName, me.botName].filter((s): s is string => Boolean(s));
+  return waitForMessage(deps.discord, {
+    channelId,
+    after: input.after,
+    from: input.from,
+    toMe: input.to_me,
+    contains: input.contains,
+    timeoutMs: input.timeout_s * 1000,
+    selfId: me.botId,
+    selfNames,
+    signal,
+  });
+}
 
 export function registerAgentTools(ctx: ToolContext): void {
-  const { server, discord, config } = ctx;
+  const { server } = ctx;
 
   server.registerTool(
     "whoami",
     { description: "Return this bot's Discord id and name, and the agent name it runs as." },
     async () => {
       try {
-        const me = await discord.ready();
-        return ok({ botId: me.botId, botName: me.botName, agentName: config.agentName ?? me.botName });
+        return ok(await whoami(ctx));
       } catch (e) {
         return fail(e);
       }
@@ -24,34 +67,11 @@ export function registerAgentTools(ctx: ToolContext): void {
     {
       description:
         "Blocks until a matching message arrives. Pass `after` = last message id you saw so you do not miss messages sent while you were busy. Returns code timeout if none.",
-      inputSchema: {
-        channel_id: z.string().optional().describe("Channel or thread id. Default: DISCORD_DEFAULT_CHANNEL_ID."),
-        after: z.string().regex(/^\d+$/, "after must be a message id").optional()
-          .describe("Only return messages newer than this message id."),
-        from: z.union([z.enum(["bots", "humans", "all"]), z.array(z.string())]).default("all")
-          .describe("Author filter: bots, humans, all, or a list of author ids."),
-        to_me: z.boolean().default(false)
-          .describe("Only return messages addressed to this agent (agent-msg to, or a mention of this bot)."),
-        timeout_s: z.number().int().min(1).max(600).default(300)
-          .describe("Seconds to wait before returning code timeout."),
-      },
+      inputSchema: waitForMessageShape,
     },
     async (args, extra) => {
       try {
-        const channelId = pickChannel(config, args.channel_id);
-        const me = await discord.ready();
-        const selfNames = [config.agentName, me.botName].filter((s): s is string => Boolean(s));
-        const message = await waitForMessage(discord, {
-          channelId,
-          after: args.after,
-          from: args.from,
-          toMe: args.to_me,
-          timeoutMs: args.timeout_s * 1000,
-          selfId: me.botId,
-          selfNames,
-          signal: extra.signal,
-        });
-        return ok(message);
+        return ok(await waitFor(ctx, args, extra.signal));
       } catch (e) {
         return fail(e);
       }

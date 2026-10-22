@@ -3,10 +3,14 @@ import type { Config } from "../config.js";
 import type { DiscordPort } from "../port.js";
 import { ToolError } from "../errors.js";
 
-export interface ToolContext {
-  server: McpServer;
+// What a tool function needs. The MCP server and the CLI both pass one of these.
+export interface ToolDeps {
   discord: DiscordPort;
   config: Config;
+}
+
+export interface ToolContext extends ToolDeps {
+  server: McpServer;
 }
 
 // Shared result helpers for all tools.

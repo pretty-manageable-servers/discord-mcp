@@ -50,13 +50,60 @@ For the full steps, see [docs/setup.md](docs/setup.md).
 | `list_guilds` | List the servers the bot is in. |
 | `list_channels` | List the channels in a server. Takes `guild_id`. |
 | `read_messages` | Read messages, oldest first. `limit` is 1 to 100 (default 20). Takes optional `after` and `before`. |
-| `send_message` | Send a message. `content` is at most 2000 characters. Takes optional `reply_to_id` and `agent_msg`. |
+| `send_message` | Send a message. `content` is at most 2000 characters. Takes optional `reply_to_id`, `agent_msg` and `files` (local paths: at most 10, each at most 10 MB). |
 | `create_thread` | Create a thread. Takes `name` and an optional `message_id`. |
 | `add_reaction` | Add an emoji reaction to a message. Takes `channel_id`, `message_id` and `emoji`. |
-| `wait_for_message` | Wait for a new message that matches a filter. `timeout_s` is 1 to 600 (default 300). |
+| `wait_for_message` | Wait for a new message that matches a filter. Takes optional `contains` (text the message must include). `timeout_s` is 1 to 600 (default 300). |
 | `search_messages` | Search the local cache. Takes optional `query`, `channel_id`, `author_id`, `since` and `until` (ISO times). Give at least one of `query`, `channel_id` or `author_id`. `limit` is 1 to 100 (default 20). Searches cached messages only. |
 
 `channel_id` is optional in `read_messages`, `send_message`, `create_thread` and `wait_for_message`. If you leave it out, the server uses `DISCORD_DEFAULT_CHANNEL_ID`. `add_reaction` always needs `channel_id`.
+
+## CLI
+
+The same binary is also a command-line tool. A coding agent can run it from a shell to drive Discord tests. Each command runs once and exits. It uses the same environment variables, the same allowed-channel rule and the same cache as the MCP server.
+
+With no arguments, `discord-mcp` (or `discord-mcp mcp`) starts the MCP server. Any other first word is a command.
+
+Output is plain text, one line per item. Add `--json` for the JSON form. Errors go to stderr as `error <code>: <message>` and exit 1 (with `--json`, a JSON object `{ "error": { "code", "message" } }`). A bad flag prints short help and exits 2. `discord-mcp help` lists every command.
+
+| Command | What it does | Output (text) |
+| --- | --- | --- |
+| `whoami` | Show the bot identity. | `<bot id> <bot name>` |
+| `guilds` | List the servers the bot is in. | `<id> <name>` |
+| `channels [--guild <id>]` | List text channels of one server, or of all servers without `--guild`. | `<id> #<name> <type>` (all-servers form adds the guild id first) |
+| `read [--channel <id>] [--limit N] [--before <id>] [--after <id>] [--max-chars N]` | Read messages, oldest first. Without `--channel`, uses `DISCORD_DEFAULT_CHANNEL_ID`. | one line per message |
+| `send [--channel <id>] (--content <text> \| --content-file <path>) [--reply-to <id>] [--file <path>]... [--agent-to <name>] [--agent-thread <name>] [--agent-kind request\|reply\|note]` | Send a message. `--file` is repeatable: at most 10 files, each at most 10 MB, checked before upload. | `sent <id> <url>`, then `file <name> <size>B` per attachment |
+| `thread [--channel <id>] --name <name> [--message <id>]` | Create a thread, optionally from a message. | `thread <id> <name>` |
+| `react --channel <id> --message <id> --emoji <emoji>` | Add a reaction. | `reacted` |
+| `wait [--channel <id>] [--after <id>] [--from <bots\|humans\|all\|userId>]... [--to-me] [--contains <text>] [--timeout <seconds>] [--max-chars N]` | Wait for one matching message. Times out after `--timeout` seconds (default 300, max 600) with `error timeout`. | one line for the message |
+| `search [--query <text>] [--channel <id>] [--author <id>] [--since <iso>] [--until <iso>] [--limit N] [--max-chars N]` | Search the local cache only. | one line per message |
+
+Message lines look like this:
+
+```
+1562920405608701992 16:05 UTC ann: line one⏎line two [files: a.png] ↩1562920000000000000
+```
+
+The time is UTC. Newlines show as `⏎`. `[files: ...]` appears when the message has attachments, and `↩<id>` when it is a reply. Long text is kept unless you pass `--max-chars N`.
+
+Global options:
+
+- `--env-file <path>` loads `KEY=VALUE` lines from a file before the config is read. Values are never printed.
+- `--json` prints the JSON form of the result.
+
+A value that starts with `-` must be written as `--content=-text`. Otherwise the parser reads it as a flag.
+
+### Agent test: send, then wait for the bot reply
+
+```sh
+export DISCORD_BOT_TOKEN=... DISCORD_ALLOWED_CHANNEL_IDS=123 DISCORD_MCP_DB=/tmp/tester.db
+# Mark the position first, so the reply is not missed.
+LAST=$(discord-mcp read --channel 123 --limit 1 | cut -d' ' -f1)
+discord-mcp send --channel 123 --content "!ping"
+discord-mcp wait --channel 123 --after "$LAST" --from bots --contains pong --timeout 60
+```
+
+`wait` exits 0 and prints the reply. On timeout it exits 1 with `error timeout: ...`.
 
 ## Local cache
 

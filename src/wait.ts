@@ -7,6 +7,8 @@ export interface WaitOptions {
   after?: string;
   from: "bots" | "humans" | "all" | string[];
   toMe: boolean;
+  // Only messages whose text includes this string.
+  contains?: string;
   timeoutMs: number;
   selfId: string;
   selfNames: string[];
@@ -32,6 +34,7 @@ export function matches(m: MessageView, o: WaitOptions): boolean {
   if (m.authorId === o.selfId) return false;
   if (!fromOk(m, o.from)) return false;
   if (o.toMe && !isToMe(m, o)) return false;
+  if (o.contains !== undefined && !m.content.includes(o.contains)) return false;
   if (o.after !== undefined && BigInt(m.id) <= BigInt(o.after)) return false;
   return true;
 }

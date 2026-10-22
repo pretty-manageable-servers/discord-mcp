@@ -8,15 +8,18 @@ import {
   type PartialMessage,
   Partials,
 } from "discord.js";
+import { basename } from "node:path";
 import { ToolError } from "./errors.js";
 import { parseAgentMsg } from "./parse.js";
 import type { DiscordPort } from "./port.js";
 import type { BotIdentity, ChannelView, GuildView, MessageView } from "./types.js";
 
 // Logs go to stderr only. stdout is the MCP channel.
-function log(...args: unknown[]): void {
+export type Logger = (...args: unknown[]) => void;
+
+export const defaultLog: Logger = (...args) => {
   console.error("[discord]", ...args);
-}
+};
 
 function compareIds(a: string, b: string): number {
   const x = BigInt(a);
@@ -66,7 +69,7 @@ async function call<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-export function createDiscord(token: string): DiscordPort {
+export function createDiscord(token: string, log: Logger = defaultLog): DiscordPort {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -145,6 +148,7 @@ export function createDiscord(token: string): DiscordPort {
         const sent = await channel.send({
           content,
           reply: opts?.replyToId ? { messageReference: opts.replyToId } : undefined,
+          files: opts?.files?.map((path) => ({ attachment: path, name: basename(path) })),
           allowedMentions: { parse: [] },
         });
         return toView(sent);
@@ -195,6 +199,10 @@ export function createDiscord(token: string): DiscordPort {
       return () => {
         client.off(Events.MessageUpdate, handler);
       };
+    },
+
+    destroy() {
+      client.destroy();
     },
 
     onMessageDelete(cb) {

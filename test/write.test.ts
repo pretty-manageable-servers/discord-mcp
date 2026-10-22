@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -102,5 +105,29 @@ describe("write tools", () => {
     expect(isError).toBe(false);
     expect(body).toEqual({ ok: true });
     expect(fake.reactions).toEqual([{ channelId: "c1", messageId: "42", emoji: "👍" }]);
+  });
+});
+
+describe("write tools with files", () => {
+  it("mcp_send_message_files_input", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dmcp-files-"));
+    const file = join(dir, "note.txt");
+    writeFileSync(file, "hello");
+    const fake = new FakeDiscord();
+    const client = await connect(fake, { ...baseConfig, allowedChannelIds: ["c1"] });
+    const { isError, body } = await call(client, "send_message", {
+      channel_id: "c1",
+      content: "see file",
+      files: [file],
+    });
+    expect(isError).toBe(false);
+    expect(body.attachments).toEqual([{ name: "note.txt", url: "https://cdn.fake/note.txt", size: 5 }]);
+
+    const tooMany = (await client.callTool({
+      name: "send_message",
+      arguments: { channel_id: "c1", content: "x", files: Array.from({ length: 11 }, () => file) },
+    })) as unknown as RawResult;
+    expect(tooMany.isError).toBe(true);
+    expect(fake.messages).toHaveLength(1);
   });
 });
