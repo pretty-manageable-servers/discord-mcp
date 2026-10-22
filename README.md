@@ -88,7 +88,7 @@ The time is UTC. Newlines show as `⏎`. `[files: ...]` appears when the message
 
 Global options:
 
-- `--env-file <path>` loads `KEY=VALUE` lines from a file before the config is read. Values are never printed.
+- `--env <path>` loads `KEY=VALUE` lines from a file before the config is read. Values are never printed.
 - `--json` prints the JSON form of the result.
 
 A value that starts with `-` must be written as `--content=-text`. Otherwise the parser reads it as a flag.
@@ -128,6 +128,7 @@ Tool errors are JSON objects with `code` and `message`. The codes are:
 - `too_long`
 - `bad_input`
 - `discord_error`
+- `config_error` (CLI only): the token or the `--env` file is missing or unreadable.
 
 ## Agent messages
 

@@ -90,7 +90,7 @@ class UsageError extends Error {}
 
 const GLOBAL_OPTIONS = {
   json: { type: "boolean" },
-  "env-file": { type: "string" },
+  env: { type: "string" },
   help: { type: "boolean", short: "h" },
 } as const;
 
@@ -350,11 +350,11 @@ export const COMMANDS: Record<string, Command> = {
   },
 };
 
-// The first token that is not a flag and not the value of --env-file.
+// The first token that is not a flag and not the value of --env.
 function commandIndex(argv: string[]): number {
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i]!;
-    if (t === "--env-file") {
+    if (t === "--env") {
       i++;
       continue;
     }
@@ -376,7 +376,7 @@ export function helpText(): string {
   lines.push(
     "",
     "global options:",
-    "  --env-file <path>  load KEY=VALUE lines from this file first (values are never printed)",
+    "  --env <path>      load KEY=VALUE lines from this file first (values are never printed)",
     "  --json             print JSON instead of text (errors too)",
     "  -h, --help         show help for a command",
     "",
@@ -396,7 +396,7 @@ function errorBody(err: unknown): { code: string; message: string } {
   return { code: "discord_error", message: err instanceof Error ? err.message : String(err) };
 }
 
-// Loads --env-file into process.env (existing variables are kept), then reads the config.
+// Loads --env into process.env (existing variables are kept), then reads the config.
 function configFromEnv(envFile: string | undefined): Config {
   if (envFile !== undefined) {
     // Checked first: process.loadEnvFile exits the process when the file is missing.
@@ -469,7 +469,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<number
   const json = values.json === true;
   let session: Session | undefined;
   try {
-    const config = deps.config ?? configFromEnv(str(values["env-file"]));
+    const config = deps.config ?? configFromEnv(str(values.env));
     let port = deps.port;
     let store = deps.store;
     if (!port) {
