@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ToolError } from "../src/errors.js";
 import { matches, waitForMessage, type WaitOptions } from "../src/wait.js";
+import type { MessageView } from "../src/types.js";
 import { FakeDiscord, makeMessage } from "./fake-discord.js";
 
 function base(over: Partial<WaitOptions> = {}): WaitOptions {
@@ -53,6 +54,31 @@ describe("wait_for_message", () => {
     d.push(makeMessage({ channelId: "c1", authorId: "u2", content: "theirs" }));
     const m = await p;
     expect(m.content).toBe("theirs");
+  });
+
+  it("wait_final_returns_settled_answer", async () => {
+    vi.useFakeTimers();
+    const d = new FakeDiscord();
+    let result: MessageView | undefined;
+    const p = waitForMessage(d, base({
+      timeoutMs: 60_000,
+      final: { settleMs: 1000, ignoreProgress: /:pulse:/ },
+    })).then((m) => { result = m; });
+    const msg = makeMessage({ channelId: "c1", authorId: "u2", content: ":pulse: thinking" });
+    d.push(msg);
+    await vi.advanceTimersByTimeAsync(5000);
+    d.edit(msg.id, ":pulse: still thinking");
+    await vi.advanceTimersByTimeAsync(5000);
+    // Still progress: not returned, however long it is quiet.
+    expect(result).toBeUndefined();
+    d.edit(msg.id, "42");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    await p;
+    expect(result?.id).toBe(msg.id);
+    expect(result?.content).toBe("42");
+    vi.useRealTimers();
   });
 
   it("from filter", async () => {

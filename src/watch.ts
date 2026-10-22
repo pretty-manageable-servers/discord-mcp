@@ -1,12 +1,16 @@
 import { messageLine } from "./format.js";
 import type { DiscordPort } from "./port.js";
+import { DEFAULT_SETTLE_MS, SettleTimers } from "./settle.js";
 import type { MessageView } from "./types.js";
 
-export const WATCH_EVENTS = ["new", "edit", "delete"] as const;
+export const WATCH_EVENTS = ["new", "edit", "delete", "final"] as const;
 export type WatchEvent = (typeof WATCH_EVENTS)[number];
 
 // One message prints at most one edit line per window. The latest text is printed when the window ends.
 export const EDIT_WINDOW_MS = 3000;
+
+// Final messages remembered after they print, so a repeated settle with the same text prints nothing.
+const FINAL_MEMORY = 1000;
 
 export interface WatchOptions {
   // Empty or undefined: any channel.
@@ -21,6 +25,10 @@ export interface WatchOptions {
   untilIdleMs?: number;
   exitAfter?: number;
   json: boolean;
+  // For the final event: how long a message must be quiet. Default 8 seconds.
+  settleMs?: number;
+  // A message whose latest text matches is never final. Use a regex without the g flag.
+  ignoreProgress?: RegExp;
 }
 
 export interface WatchRun {
@@ -50,6 +58,9 @@ export function runWatch(opts: WatchOptions, run: WatchRun): Promise<void> {
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     const tracks = new Map<string, Track>();
     const unsubscribes: (() => void)[] = [];
+    // Latest text printed as final, per message id. Bounded by FINAL_MEMORY.
+    const finalText = new Map<string, string>();
+    const settle = new SettleTimers(opts.settleMs ?? DEFAULT_SETTLE_MS, onSettled);
 
     function inScope(m: MessageView): boolean {
       if (channels && !channels.has(m.channelId) && !(m.threadId !== null && channels.has(m.threadId))) return false;
@@ -67,13 +78,14 @@ export function runWatch(opts: WatchOptions, run: WatchRun): Promise<void> {
       clearTimeout(idleTimer);
       for (const t of tracks.values()) clearTimeout(t.timer);
       tracks.clear();
+      settle.clear();
       for (const off of unsubscribes) off();
       signal?.removeEventListener("abort", finish);
       resolve();
     }
 
     // Prints one event line. Counts the event for --exit-after and restarts the --until-idle timer.
-    function printEvent(kind: "new" | "edit" | "delete", m: MessageView | null, ref: { channelId: string; id: string }): void {
+    function printEvent(kind: "new" | "edit" | "delete" | "final", m: MessageView | null, ref: { channelId: string; id: string }): void {
       if (opts.json) {
         const body = kind === "delete" ? { event: kind, channelId: ref.channelId, id: ref.id } : { event: kind, message: m };
         out(`${JSON.stringify(body)}\n`);
@@ -123,14 +135,35 @@ export function runWatch(opts: WatchOptions, run: WatchRun): Promise<void> {
       t.timer = setTimeout(() => windowEnd(id), EDIT_WINDOW_MS);
     }
 
+    // A create or edit restarts the quiet timer of a message that --events final watches.
+    function armFinal(m: MessageView): void {
+      if (!done && wanted.has("final") && inScope(m)) settle.arm(m);
+    }
+
+    // The message went quiet. Print it as final unless it is progress or already printed with this text.
+    function onSettled(m: MessageView): void {
+      if (done) return;
+      if (opts.ignoreProgress?.test(m.content)) return;
+      if (finalText.get(m.id) === m.content) return;
+      finalText.delete(m.id);
+      finalText.set(m.id, m.content);
+      if (finalText.size > FINAL_MEMORY) finalText.delete(finalText.keys().next().value as string);
+      printEvent("final", m, { channelId: m.channelId, id: m.id });
+    }
+
     function onNew(m: MessageView): void {
-      if (done || !wanted.has("new") || !inScope(m)) return;
-      printEvent("new", m, { channelId: m.channelId, id: m.id });
-      if (!done) startTrack(m);
+      if (done) return;
+      if (wanted.has("new") && inScope(m)) {
+        printEvent("new", m, { channelId: m.channelId, id: m.id });
+        if (!done) startTrack(m);
+      }
+      armFinal(m);
     }
 
     function onEdit(m: MessageView): void {
-      if (done || !wanted.has("edit") || !inScope(m)) return;
+      if (done) return;
+      armFinal(m);
+      if (!wanted.has("edit") || !inScope(m)) return;
       const t = tracks.get(m.id);
       if (!t) {
         printEvent("edit", m, { channelId: m.channelId, id: m.id });
@@ -143,7 +176,9 @@ export function runWatch(opts: WatchOptions, run: WatchRun): Promise<void> {
 
     function onDelete(ref: { channelId: string; id: string }): void {
       // The gateway delete event has only the channel and message ids, so only --channel applies to it.
-      if (done || !wanted.has("delete")) return;
+      if (done) return;
+      settle.cancel(ref.id);
+      if (!wanted.has("delete")) return;
       if (channels && !channels.has(ref.channelId)) return;
       const t = tracks.get(ref.id);
       if (t) {

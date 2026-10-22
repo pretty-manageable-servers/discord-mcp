@@ -23,6 +23,8 @@ import {
 import { waitFor, waitForMessageInput, whoami } from "./tools/agent.js";
 import { searchMessages, searchMessagesInput } from "./tools/search.js";
 import { runWatch, WATCH_EVENTS, type WatchEvent, type WatchOptions } from "./watch.js";
+import { DEFAULT_SETTLE_MS } from "./settle.js";
+import type { FinalOptions } from "./wait.js";
 
 // A connected Discord port and cache. close() disconnects and closes the store.
 export interface Session {
@@ -115,13 +117,32 @@ function positiveInt(v: Values[string], flag: string): number | undefined {
   return n;
 }
 
-// --events: a comma list of new, edit and delete. Default: new,edit.
+// --events: a comma list of new, edit, delete and final. Default: new,edit.
 function watchEvents(raw: string | undefined): WatchEvent[] {
   if (raw === undefined) return ["new", "edit"];
   const names = raw.split(",").map((s) => s.trim()).filter(Boolean);
   const bad = names.filter((n) => !(WATCH_EVENTS as readonly string[]).includes(n));
-  if (names.length === 0 || bad.length > 0) throw new UsageError("--events takes new, edit and delete, comma separated");
+  if (names.length === 0 || bad.length > 0) {
+    throw new UsageError("--events takes new, edit, delete and final, comma separated");
+  }
   return [...new Set(names)] as WatchEvent[];
+}
+
+// --settle <seconds>: how long a message must be quiet to be final. Default 8. Milliseconds, or undefined.
+function settleMs(v: Values): number | undefined {
+  const n = positiveInt(v.settle, "settle");
+  return n === undefined ? undefined : n * 1000;
+}
+
+// --ignore-progress <regex>: messages whose latest text matches are never final.
+function progressPattern(v: Values): RegExp | undefined {
+  const raw = str(v["ignore-progress"]);
+  if (raw === undefined) return undefined;
+  try {
+    return new RegExp(raw);
+  } catch {
+    throw new UsageError("--ignore-progress must be a valid regular expression");
+  }
 }
 
 // The server of a channel, found from the servers and channels the bot can see.
@@ -315,7 +336,8 @@ export const COMMANDS: Record<string, Command> = {
     summary: "Wait for a new message that matches the filters. Exits 1 with code timeout if none arrives.",
     usage:
       "wait [--channel <id>] [--after <id>] [--from <bots|humans|all|userId>]... [--to-me] " +
-      "[--contains <text>] [--timeout <seconds>] [--max-chars N]",
+      "[--contains <text>] [--timeout <seconds>] [--max-chars N] " +
+      "[--final [--settle <seconds>] [--ignore-progress <regex>]]",
     options: {
       ...CHANNEL,
       after: { type: "string" },
@@ -324,6 +346,9 @@ export const COMMANDS: Record<string, Command> = {
       contains: { type: "string" },
       timeout: { type: "string" },
       ...MAX_CHARS,
+      final: { type: "boolean" },
+      settle: { type: "string" },
+      "ignore-progress": { type: "string" },
     },
     validate(v) {
       const froms = (v.from as string[] | undefined) ?? [];
@@ -331,6 +356,11 @@ export const COMMANDS: Record<string, Command> = {
       if (keyword && froms.length > 1) {
         throw new UsageError("--from takes bots, humans or all alone, or one or more user ids");
       }
+      if (v.final !== true && (v.settle !== undefined || v["ignore-progress"] !== undefined)) {
+        throw new UsageError("--settle and --ignore-progress need --final");
+      }
+      settleMs(v);
+      progressPattern(v);
     },
     async run(v, ctx) {
       const froms = (v.from as string[] | undefined) ?? [];
@@ -344,7 +374,11 @@ export const COMMANDS: Record<string, Command> = {
         contains: str(v.contains),
         timeout_s: num(v.timeout),
       });
-      const message = await waitFor(ctx, input);
+      // --final: the first match that has gone quiet. Without it, the first match.
+      const final: FinalOptions | undefined = v.final === true
+        ? { settleMs: settleMs(v) ?? DEFAULT_SETTLE_MS, ignoreProgress: progressPattern(v) }
+        : undefined;
+      const message = await waitFor(ctx, input, undefined, final);
       return messagesOutput([message], maxChars(v));
     },
   },
@@ -352,10 +386,12 @@ export const COMMANDS: Record<string, Command> = {
   watch: {
     summary:
       "Stream new, edited and deleted messages, one line each, until stopped. " +
-      "Edits of one message are coalesced to one line per 3 seconds. With --json, one JSON object per line.",
+      "Edits of one message are coalesced to one line per 3 seconds. " +
+      "With --events final, prints a message once it has been quiet for --settle seconds. With --json, one JSON object per line.",
     usage:
       "watch [--channel <id>]... [--guild <id>] [--from <userId>]... [--bots-only | --no-bots] " +
-      "[--contains <text>] [--events new,edit,delete] [--max-chars N] [--until-idle <seconds>] [--exit-after <count>]",
+      "[--contains <text>] [--events new,edit,delete,final] [--max-chars N] [--until-idle <seconds>] " +
+      "[--exit-after <count>] [--settle <seconds>] [--ignore-progress <regex>]",
     options: {
       channel: { type: "string", multiple: true },
       guild: { type: "string" },
@@ -367,14 +403,21 @@ export const COMMANDS: Record<string, Command> = {
       ...MAX_CHARS,
       "until-idle": { type: "string" },
       "exit-after": { type: "string" },
+      settle: { type: "string" },
+      "ignore-progress": { type: "string" },
     },
     validate(v) {
       if (v["bots-only"] === true && v["no-bots"] === true) {
         throw new UsageError("--bots-only and --no-bots cannot be used together");
       }
-      watchEvents(str(v.events));
+      const events = watchEvents(str(v.events));
+      if (!events.includes("final") && (v.settle !== undefined || v["ignore-progress"] !== undefined)) {
+        throw new UsageError("--settle and --ignore-progress need final in --events");
+      }
       positiveInt(v["until-idle"], "until-idle");
       positiveInt(v["exit-after"], "exit-after");
+      settleMs(v);
+      progressPattern(v);
     },
     async run(v, ctx) {
       const channelIds = strs(v.channel);
@@ -395,6 +438,8 @@ export const COMMANDS: Record<string, Command> = {
         untilIdleMs: untilIdle === undefined ? undefined : untilIdle * 1000,
         exitAfter: positiveInt(v["exit-after"], "exit-after"),
         json: v.json === true,
+        settleMs: settleMs(v),
+        ignoreProgress: progressPattern(v),
       };
       // SIGINT and SIGTERM end the watch. The caller then closes the port and the store.
       const stop = new AbortController();
