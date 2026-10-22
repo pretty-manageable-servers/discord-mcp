@@ -13,7 +13,7 @@ export function makeMessage(over: Partial<MessageView> = {}): MessageView {
     id: nextId(), channelId: "c1", guildId: "g1",
     authorId: "u1", authorName: "human", authorIsBot: false,
     content: "hi", createdAt: new Date().toISOString(),
-    replyToId: null, threadId: null, attachments: [], agentMsg: null,
+    replyToId: null, threadId: null, attachments: [], agentMsg: null, components: [], embeds: [],
     ...over,
   };
 }
