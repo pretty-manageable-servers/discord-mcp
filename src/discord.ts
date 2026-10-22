@@ -10,6 +10,7 @@ import {
 } from "discord.js";
 import { basename } from "node:path";
 import { ToolError } from "./errors.js";
+import { flattenComponents, mapEmbeds, type RawComponent, type RawEmbed } from "./components.js";
 import { parseAgentMsg } from "./parse.js";
 import type { DiscordPort } from "./port.js";
 import type { BotIdentity, ChannelView, GuildView, MessageView } from "./types.js";
@@ -58,6 +59,8 @@ export function toView(message: Message): MessageView {
       size: a.size,
     })),
     agentMsg: parseAgentMsg(message.content),
+    components: flattenComponents(message.components.map((c) => c.toJSON() as unknown as RawComponent)),
+    embeds: mapEmbeds(message.embeds.map((e) => e.toJSON() as unknown as RawEmbed)),
   };
 }
 

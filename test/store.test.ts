@@ -19,6 +19,8 @@ function msg(over: Partial<MessageView> & { id: string }): MessageView {
     threadId: null,
     attachments: [],
     agentMsg: null,
+    components: [],
+    embeds: [],
     ...over,
   };
 }
@@ -216,7 +218,7 @@ it("v1 file upgrades to v2", () => {
       const version = check.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as {
         value: string;
       };
-      expect(version.value).toBe("2");
+      expect(version.value).toBe("3");
       const oldIndex = check.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'messages_channel_id'",
       ).get();

@@ -87,6 +87,19 @@ Message lines look like this:
 
 The time is UTC. Newlines show as `⏎`. `[files: ...]` appears when the message has attachments, and `↩<id>` when it is a reply. Long text is kept unless you pass `--max-chars N`.
 
+Bot cards are shown too. A message with Components V2 (text displays, containers, sections), buttons or select menus gets ` [card: ...]` after its text. An embed gets ` [embed: ...]`. In the card:
+
+- Text displays show their markdown text. Containers and sections flatten in order, separated by ` | `.
+- Buttons show as `[button: Label]`. Link buttons show as `[link: Label → url]`. Select menus show as `[select: placeholder]`.
+- An embed shows its title, description, each field as `name: value`, and its footer, separated by ` | `.
+
+`--max-chars N` cuts the text, the card and the embed each to N characters. The JSON output (`--json`) and the MCP `read_messages`, `wait_for_message` and `search_messages` results carry two more fields, unchanged otherwise:
+
+- `components`: the flattened card text, a list of strings. Empty when the message has no components.
+- `embeds`: a list of `{title, description, fields: [{name, value}], footer}`. Empty when there are no embeds.
+
+Old cache rows have no card or embed data until the message is read again from Discord. Cards are not searched by `search_messages`, which matches message text only.
+
 Pinging: `send --mention <userId>` (repeatable) and the MCP `send_message` input `mention` (a list of user IDs) let the bot ping specific users. Discord only shows a ping when the message has `<@id>` in it. With `--mention`, the server adds `<@id> ` to the start of the content for each user the text does not already mention. The server sends no other pings: `@everyone`, roles and the replied-to user do not ping. If a reply names users, the replied-to author also pings.
 
 Global options:
@@ -157,6 +170,7 @@ The server keeps a local SQLite cache of messages:
 - An edit updates the stored message. A delete hides it.
 - `read_messages` first fetches from the Discord API the messages newer than the newest stored message. Then it reads from the cache.
 - `search_messages` covers only cached messages. Use `read_messages` on a channel first to fill its cache.
+- The cache stores each message's `components` and `embeds` too. Version 3 of the cache adds these columns to an existing file on first open. Rows from before the upgrade read as having no components or embeds, and nothing else changes.
 
 The cache file is at `DISCORD_MCP_DB`. To reset the cache, stop the server and delete the file.
 

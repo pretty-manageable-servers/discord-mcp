@@ -1,3 +1,5 @@
+import type { EmbedView } from "./components.js";
+
 export interface AgentMsg {
   to?: string;
   thread?: string;
@@ -23,6 +25,9 @@ export interface MessageView {
   threadId: string | null;
   attachments: Attachment[];
   agentMsg: AgentMsg | null;
+  // Flattened text of Components V2 and action rows, in order. Empty when there are none.
+  components: string[];
+  embeds: EmbedView[];
 }
 
 export interface GuildView { id: string; name: string }

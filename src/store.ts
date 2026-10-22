@@ -1,7 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { EmbedView } from "./components.js";
 import type { AgentMsg, Attachment, MessageView } from "./types.js";
+
+// Version 3 adds components_json and embeds_json (nullable; old rows read as empty).
+const SCHEMA_VERSION = 3;
 
 export interface SearchQuery {
   text?: string;       // FTS5 match on content; plain words, quoted for safety by the store
@@ -14,7 +18,8 @@ export interface SearchQuery {
 
 // Local SQLite cache of messages (node:sqlite, FTS5). WP6a implements it.
 // Tables: messages(id PK, channel_id, guild_id, thread_id, author_id, author_name, author_is_bot,
-//   content, created_at, reply_to_id, attachments_json, agent_msg_json, deleted INTEGER, edited_at),
+//   content, created_at, reply_to_id, attachments_json, agent_msg_json, components_json, embeds_json,
+//   deleted INTEGER, edited_at),
 //   messages_fts(content) external content on messages, sync(channel_id PK, synced_at).
 export interface MessageStore {
   upsert(m: MessageView): void;
@@ -51,10 +56,13 @@ interface MessageRow {
   reply_to_id: string | null;
   attachments_json: string | null;
   agent_msg_json: string | null;
+  components_json: string | null;
+  embeds_json: string | null;
 }
 
 const ROW_COLUMNS = `m.id, m.channel_id, m.guild_id, m.thread_id, m.author_id, m.author_name,
-  m.author_is_bot, m.content, m.created_at, m.reply_to_id, m.attachments_json, m.agent_msg_json`;
+  m.author_is_bot, m.content, m.created_at, m.reply_to_id, m.attachments_json, m.agent_msg_json,
+  m.components_json, m.embeds_json`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -107,14 +115,26 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT INTO meta (key, value) VALUES ('schema_version', '2')
-  ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 `;
+
+// Adds the columns that version 3 needs to an older file, then records the version.
+// Existing rows keep NULL in the new columns, which read as no components and no embeds.
+function migrate(db: DatabaseSync): void {
+  const columns = new Set(
+    (db.prepare("PRAGMA table_info(messages)").all() as unknown as { name: string }[]).map((c) => c.name),
+  );
+  if (!columns.has("components_json")) db.exec("ALTER TABLE messages ADD COLUMN components_json TEXT");
+  if (!columns.has("embeds_json")) db.exec("ALTER TABLE messages ADD COLUMN embeds_json TEXT");
+  db.prepare(
+    "INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run(String(SCHEMA_VERSION));
+}
 
 const UPSERT_SQL = `
 INSERT INTO messages (id, id_num, channel_id, guild_id, thread_id, author_id, author_name,
-  author_is_bot, content, created_at, reply_to_id, attachments_json, agent_msg_json, deleted, edited_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+  author_is_bot, content, created_at, reply_to_id, attachments_json, agent_msg_json,
+  components_json, embeds_json, deleted, edited_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
 ON CONFLICT(id) DO UPDATE SET
   id_num = excluded.id_num,
   channel_id = excluded.channel_id,
@@ -128,6 +148,8 @@ ON CONFLICT(id) DO UPDATE SET
   reply_to_id = excluded.reply_to_id,
   attachments_json = excluded.attachments_json,
   agent_msg_json = excluded.agent_msg_json,
+  components_json = excluded.components_json,
+  embeds_json = excluded.embeds_json,
   edited_at = CASE WHEN messages.content <> excluded.content THEN ? ELSE messages.edited_at END
 `;
 
@@ -145,6 +167,8 @@ function rowToView(r: MessageRow): MessageView {
     threadId: r.thread_id,
     attachments: r.attachments_json ? (JSON.parse(r.attachments_json) as Attachment[]) : [],
     agentMsg: r.agent_msg_json ? (JSON.parse(r.agent_msg_json) as AgentMsg) : null,
+    components: r.components_json ? (JSON.parse(r.components_json) as string[]) : [],
+    embeds: r.embeds_json ? (JSON.parse(r.embeds_json) as EmbedView[]) : [],
   };
 }
 
@@ -168,6 +192,7 @@ export function openStore(path: string): MessageStore {
   if (!isMemory) db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA busy_timeout=5000");
   db.exec(SCHEMA);
+  migrate(db);
 
   const upsertStmt = db.prepare(UPSERT_SQL);
 
@@ -186,6 +211,8 @@ export function openStore(path: string): MessageStore {
       m.replyToId,
       JSON.stringify(m.attachments ?? []),
       m.agentMsg ? JSON.stringify(m.agentMsg) : null,
+      JSON.stringify(m.components ?? []),
+      JSON.stringify(m.embeds ?? []),
       new Date().toISOString(),
     );
   }
