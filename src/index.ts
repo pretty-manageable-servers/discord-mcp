@@ -1,40 +1,39 @@
 #!/usr/bin/env node
-import { mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { withCache } from "./cached.js";
+import { openSession, runCli } from "./cli.js";
 import { loadConfig } from "./config.js";
-import { createDiscord } from "./discord.js";
 import { buildServer } from "./server.js";
-import { openStore } from "./store.js";
 
-async function main() {
+// No arguments, or `mcp`: the stdio MCP server. Anything else is a CLI command.
+async function serveMcp() {
   const config = loadConfig(process.env);
-  const discord = createDiscord(config.token);
-  const me = await discord.ready();
-
-  const dbPath = config.dbPath ?? join(homedir(), ".cache", "discord-mcp", `${me.botId}.db`);
-  mkdirSync(dirname(dbPath), { recursive: true });
-  const store = openStore(dbPath);
   // stdout is the MCP channel; log to stderr only.
-  console.error(`discord-mcp: message cache at ${dbPath}`);
-
-  const port = withCache(discord, store);
-  const server = buildServer(port, config, store);
+  const session = await openSession(config, console.error);
 
   const shutdown = () => {
-    store.close();
+    session.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
+  const server = buildServer(session.port, config, session.store);
   await server.connect(new StdioServerTransport());
 }
 
+async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.length === 0 || (argv.length === 1 && argv[0] === "mcp")) {
+    await serveMcp();
+    return;
+  }
+  const code = await runCli(argv);
+  // Exit once the output is flushed. The command has already closed Discord and the store.
+  process.stdout.write("", () => process.exit(code));
+}
+
 main().catch((err) => {
-  // stdout is the MCP channel; log to stderr only.
+  // stdout may be the MCP channel; log to stderr only.
   console.error(err instanceof Error ? err.message : err);
   process.exit(1);
 });

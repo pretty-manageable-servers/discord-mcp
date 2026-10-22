@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { basename } from "node:path";
 import type { DiscordPort } from "../src/port.js";
 import type { ChannelView, GuildView, MessageView } from "../src/types.js";
 
@@ -43,10 +45,15 @@ export class FakeDiscord implements DiscordPort {
     return opts.after ? list.slice(0, opts.limit) : list.slice(-opts.limit);
   }
 
-  async sendMessage(channelId: string, content: string, opts?: { replyToId?: string }) {
+  // Files become attachments with the file's base name and size. No upload happens.
+  async sendMessage(channelId: string, content: string, opts?: { replyToId?: string; files?: string[] }) {
+    const attachments = (opts?.files ?? []).map((path) => {
+      const name = basename(path);
+      return { name, url: `https://cdn.fake/${name}`, size: statSync(path).size };
+    });
     const m = makeMessage({
       channelId, content, authorId: this.botId, authorName: this.botName,
-      authorIsBot: true, replyToId: opts?.replyToId ?? null,
+      authorIsBot: true, replyToId: opts?.replyToId ?? null, attachments,
     });
     this.push(m);
     return m;
@@ -78,6 +85,9 @@ export class FakeDiscord implements DiscordPort {
   }
 
   listenerCount() { return this.listeners.size; }
+
+  destroyed = false;
+  destroy() { this.destroyed = true; }
 
   // Change a stored message and tell update listeners.
   edit(id: string, content: string) {
