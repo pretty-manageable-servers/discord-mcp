@@ -75,9 +75,9 @@ Output is plain text, one line per item. Add `--json` for the JSON form. Errors 
 | `send [--channel <id>] (--content <text> \| --content-file <path>) [--reply-to <id>] [--file <path>]... [--mention <userId>]... [--agent-to <name>] [--agent-thread <name>] [--agent-kind request\|reply\|note]` | Send a message. `--file` is repeatable: at most 10 files, each at most 10 MB, checked before upload. | `sent <id> <url>`, then `file <name> <size>B` per attachment |
 | `thread [--channel <id>] --name <name> [--message <id>]` | Create a thread, optionally from a message. | `thread <id> <name>` |
 | `react --channel <id> --message <id> --emoji <emoji>` | Add a reaction. | `reacted` |
-| `wait [--channel <id>] [--after <id>] [--from <bots\|humans\|all\|userId>]... [--to-me] [--contains <text>] [--timeout <seconds>] [--max-chars N]` | Wait for one matching message. Times out after `--timeout` seconds (default 300, max 600) with `error timeout`. | one line for the message |
+| `wait [--channel <id>] [--after <id>] [--from <bots\|humans\|all\|userId>]... [--to-me] [--contains <text>] [--timeout <seconds>] [--max-chars N] [--final [--settle <seconds>] [--ignore-progress <regex>]]` | Wait for one matching message. With `--final`, wait for the first match that has gone quiet. Times out after `--timeout` seconds (default 300, max 600) with `error timeout`. | one line for the message |
 | `search [--query <text>] [--channel <id>] [--author <id>] [--since <iso>] [--until <iso>] [--limit N] [--max-chars N]` | Search the local cache only. | one line per message |
-| `watch [--channel <id>]... [--guild <id>] [--from <userId>]... [--bots-only \| --no-bots] [--contains <text>] [--events new,edit,delete] [--max-chars N] [--until-idle <seconds>] [--exit-after <count>]` | Stream new, edited and deleted messages, one line each, until stopped. See [Watching](#watching). | one line per event, plus `status` lines |
+| `watch [--channel <id>]... [--guild <id>] [--from <userId>]... [--bots-only \| --no-bots] [--contains <text>] [--events new,edit,delete,final] [--max-chars N] [--until-idle <seconds>] [--exit-after <count>] [--settle <seconds>] [--ignore-progress <regex>]` | Stream new, edited and deleted messages, one line each, until stopped. Add `final` to get settled messages. See [Watching](#watching). | one line per event, plus `status` lines |
 
 Message lines look like this:
 
@@ -115,11 +115,30 @@ discord-mcp wait --channel 123 --after "$LAST" --from bots --contains pong --tim
 - `new <id> <HH:MM> UTC <author>: <text>` for a new message. Bots show `[bot]`.
 - `edit <id> ...` for an edit, with the new text. A bot's live status message is edited often, so the server prints at most one `edit` line per message every 3 seconds, with the latest text. The final text is always printed.
 - `delete <id>` for a deleted message. Only with `--events new,edit,delete`: the default is `new,edit`.
+- `final <id> <HH:MM> UTC <author>: <text>` for a message that has settled. Only with `--events ...,final`. See [Final messages](#final-messages).
 - `status reconnecting` and `status ready` when the gateway connection drops and comes back.
 
 Without `--channel`, `watch` covers every channel in the server of `DISCORD_DEFAULT_CHANNEL_ID`. If that is not set, it covers every channel the bot can see. `--from` (repeatable) and `--bots-only` or `--no-bots` narrow the authors. `--contains` matches the text. Delete events are filtered by `--channel` only, because the gateway delete event has no author or text.
 
-`--until-idle N` exits 0 after N seconds with no event line. `--exit-after K` exits 0 after K event lines. SIGINT and SIGTERM stop it. Events go into the local cache too. With `--json`, each line is one JSON object.
+`--until-idle N` exits 0 after N seconds with no event line. `--exit-after K` exits 0 after K event lines, `final` lines included. SIGINT and SIGTERM stop it. Events go into the local cache too. With `--json`, each line is one JSON object.
+
+### Final messages
+
+A bot such as Slopbot posts a progress message and edits it many times. The last edit is often the answer. `final` prints one line when a message has settled: it got no create or edit for `--settle N` seconds (default 8). The line has the latest text.
+
+- A message is final once. If it is edited again after its `final` line, `final` prints again after it settles.
+- `--ignore-progress <regex>` marks progress. A message whose latest text matches is never final. A new message that matches waits until an edit makes it not match, then settles.
+- `--settle` and `--ignore-progress` need `final` in `--events`.
+
+`wait --final` returns the first matching message that settles. It does not return progress messages. Without `--final`, `wait` returns the first match, as before.
+
+Slopbot example, where `<bot id>` is the Slopbot user id and `:slopbot_pulse:` is in its progress text:
+
+```sh
+discord-mcp watch --channel X --from <bot id> --events final --ignore-progress ':slopbot_pulse:'
+# After you send a question, wait for its answer:
+discord-mcp wait --channel X --from <bot id> --after <my msg id> --final --ignore-progress ':slopbot_pulse:'
+```
 
 Agent pattern: start the watch under a monitor, then ask the other bot with a mention.
 

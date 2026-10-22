@@ -128,6 +128,70 @@ describe("watch", () => {
     );
   });
 
+  it("watch_final_after_settle", async () => {
+    vi.useFakeTimers();
+    const run = runCli(["watch", "--events", "final", "--exit-after", "1"], deps());
+    await vi.advanceTimersByTimeAsync(0);
+    const msg = makeMessage({ channelId: "c1", authorName: "bot", authorIsBot: true, content: "working" });
+    fake.push(msg);
+    await vi.advanceTimersByTimeAsync(5000);
+    fake.edit(msg.id, "the answer");
+    // 7.9 s after the last edit: still not final.
+    await vi.advanceTimersByTimeAsync(7900);
+    expect(out.join("")).toBe("status ready\n");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await run).toBe(0);
+    expect(err).toEqual([]);
+    const lines = out.join("").trimEnd().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatch(new RegExp(`^final ${msg.id} \\d\\d:\\d\\d UTC bot \\[bot\\]: the answer$`));
+  });
+
+  it("watch_final_ignores_progress_until_answer", async () => {
+    vi.useFakeTimers();
+    const run = runCli(
+      ["watch", "--events", "final", "--ignore-progress", ":slopbot_pulse:", "--exit-after", "1"],
+      deps(),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const msg = makeMessage({ channelId: "c1", authorIsBot: true, content: ":slopbot_pulse: step 1" });
+    fake.push(msg);
+    // Progress edits, and then quiet for much longer than the settle time: nothing is final.
+    await vi.advanceTimersByTimeAsync(4000);
+    fake.edit(msg.id, ":slopbot_pulse: step 2");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(out.join("")).toBe("status ready\n");
+    // The answer edit does not match the progress text, so it settles.
+    fake.edit(msg.id, "forty-two");
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(await run).toBe(0);
+    const lines = out.join("").trimEnd().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatch(/^final \d+ \d\d:\d\d UTC human \[bot\]: forty-two$/);
+  });
+
+  it("watch_final_again_after_late_edit", async () => {
+    vi.useFakeTimers();
+    const run = runCli(["watch", "--events", "final", "--until-idle", "60"], deps());
+    await vi.advanceTimersByTimeAsync(0);
+    const msg = makeMessage({ channelId: "c1", content: "first" });
+    fake.push(msg);
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(out.join("").trimEnd().split("\n")).toHaveLength(2);
+    // A late edit after the final line: it prints final again once it settles.
+    fake.edit(msg.id, "first, corrected");
+    await vi.advanceTimersByTimeAsync(8000);
+    // An edit back to the printed text prints nothing new.
+    fake.edit(msg.id, "first, corrected");
+    await vi.advanceTimersByTimeAsync(8000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await run).toBe(0);
+    const finals = out.join("").trimEnd().split("\n").filter((l) => l.startsWith("final "));
+    expect(finals).toHaveLength(2);
+    expect(finals[0]).toMatch(/: first$/);
+    expect(finals[1]).toMatch(/: first, corrected$/);
+  });
+
   it("watch_rejects_bad_flags", async () => {
     expect(await runCli(["watch", "--bots-only", "--no-bots"], deps())).toBe(2);
     expect(await runCli(["watch", "--events", "new,bogus"], deps())).toBe(2);

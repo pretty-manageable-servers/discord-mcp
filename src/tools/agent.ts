@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolContext, ToolDeps } from "./context.js";
 import { fail, ok, pickChannel } from "./context.js";
-import { waitForMessage } from "../wait.js";
+import { waitForMessage, type FinalOptions } from "../wait.js";
 import type { MessageView } from "../types.js";
 
 export const waitForMessageShape = {
@@ -26,10 +26,12 @@ export async function whoami(deps: ToolDeps): Promise<{ botId: string; botName: 
   return { botId: me.botId, botName: me.botName, agentName: deps.config.agentName ?? me.botName };
 }
 
+// final: CLI only. Returns the first match once it has gone quiet, not while it is progress.
 export async function waitFor(
   deps: ToolDeps,
   input: WaitForMessageInput,
   signal?: AbortSignal,
+  final?: FinalOptions,
 ): Promise<MessageView> {
   const channelId = pickChannel(deps.config, input.channel_id);
   const me = await deps.discord.ready();
@@ -44,6 +46,7 @@ export async function waitFor(
     selfId: me.botId,
     selfNames,
     signal,
+    final,
   });
 }
 

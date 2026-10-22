@@ -1,6 +1,13 @@
 import { ToolError } from "./errors.js";
 import type { DiscordPort } from "./port.js";
+import { SettleTimers } from "./settle.js";
 import type { MessageView } from "./types.js";
+
+export interface FinalOptions {
+  settleMs: number;
+  // A match whose latest text matches this is not returned yet. Use a regex without the g flag.
+  ignoreProgress?: RegExp;
+}
 
 export interface WaitOptions {
   channelId: string;
@@ -13,6 +20,8 @@ export interface WaitOptions {
   selfId: string;
   selfNames: string[];
   signal?: AbortSignal;
+  // Set: return the first match that goes quiet (is final), not the first match.
+  final?: FinalOptions;
 }
 
 function fromOk(m: MessageView, from: WaitOptions["from"]): boolean {
@@ -46,21 +55,27 @@ function oldest(list: MessageView[]): MessageView {
 const PAGE_SIZE = 100;
 const MAX_BACKLOG_PAGES = 10;
 
-// Reads the backlog page by page, oldest first. Returns the oldest match, or undefined.
-async function findBacklogMatch(
+// Reads the backlog page by page, oldest first. Returns the matches: the first one only,
+// unless `all` is set. Stops early when stopped() is true.
+async function readBacklog(
   discord: DiscordPort,
   o: WaitOptions,
   stopped: () => boolean,
-): Promise<MessageView | undefined> {
+  all: boolean,
+): Promise<MessageView[]> {
+  const hits: MessageView[] = [];
   let after = o.after;
   for (let page = 0; page < MAX_BACKLOG_PAGES && !stopped(); page++) {
     const msgs = await discord.readMessages(o.channelId, { limit: PAGE_SIZE, after });
-    const hit = msgs.find((m) => matches(m, o));
-    if (hit) return hit;
+    for (const m of msgs) {
+      if (!matches(m, o)) continue;
+      hits.push(m);
+      if (!all) return hits;
+    }
     if (msgs.length < PAGE_SIZE) break;
     after = msgs[msgs.length - 1].id;
   }
-  return undefined;
+  return hits;
 }
 
 export function waitForMessage(discord: DiscordPort, o: WaitOptions): Promise<MessageView> {
@@ -71,23 +86,50 @@ export function waitForMessage(discord: DiscordPort, o: WaitOptions): Promise<Me
     }
 
     let settled = false;
-    // With `after`, live messages are buffered until the backlog has been read.
+    // With `after`, live events are buffered until the backlog has been read.
     let backlogDone = o.after === undefined;
     const buffer: MessageView[] = [];
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let unsubscribe: () => void = () => {};
+    const unsubs: (() => void)[] = [];
 
     const settle = (err: unknown, m?: MessageView) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      unsubscribe();
+      quiet?.clear();
+      for (const off of unsubs) off();
       o.signal?.removeEventListener("abort", onAbort);
       if (err !== undefined) reject(err);
       else resolve(m as MessageView);
     };
 
     const onAbort = () => settle(new ToolError("timeout", "aborted"));
+
+    // With --final, a match is returned only after it has been quiet for settleMs, and not while it is progress.
+    const quiet = o.final
+      ? new SettleTimers(o.final.settleMs, (m) => {
+          if (o.final?.ignoreProgress?.test(m.content)) return;
+          settle(undefined, m);
+        })
+      : undefined;
+
+    const accept = (m: MessageView) => {
+      if (quiet) quiet.arm(m);
+      else settle(undefined, m);
+    };
+
+    const onEvent = (m: MessageView) => {
+      if (settled) return;
+      if (!backlogDone) {
+        buffer.push(m);
+        return;
+      }
+      if (!matches(m, o)) {
+        quiet?.cancel(m.id);
+        return;
+      }
+      accept(m);
+    };
 
     o.signal?.addEventListener("abort", onAbort, { once: true });
     timer = setTimeout(
@@ -96,22 +138,26 @@ export function waitForMessage(discord: DiscordPort, o: WaitOptions): Promise<Me
     );
 
     // Subscribe first, so no message sent during the backlog read is lost.
-    unsubscribe = discord.onMessage((m) => {
-      if (settled || !matches(m, o)) return;
-      if (!backlogDone) {
-        buffer.push(m);
-        return;
-      }
-      settle(undefined, m);
-    });
+    unsubs.push(discord.onMessage(onEvent));
+    // Edits matter only for --final: an answer is often the last edit of a message.
+    if (o.final) unsubs.push(discord.onMessageUpdate(onEvent));
 
     if (o.after !== undefined) {
-      findBacklogMatch(discord, o, () => settled)
-        .then((hit) => {
+      readBacklog(discord, o, () => settled, o.final !== undefined)
+        .then((hits) => {
           if (settled) return;
           backlogDone = true;
-          const candidates = hit ? [hit, ...buffer] : buffer;
-          if (candidates.length > 0) settle(undefined, oldest(candidates));
+          if (o.final) {
+            for (const h of hits) accept(h);
+            for (const m of buffer) {
+              if (matches(m, o)) accept(m);
+              else quiet?.cancel(m.id);
+            }
+          } else {
+            const candidates = [...hits, ...buffer.filter((m) => matches(m, o))];
+            if (candidates.length > 0) settle(undefined, oldest(candidates));
+          }
+          buffer.length = 0;
         })
         .catch((err: unknown) => settle(err));
     }
