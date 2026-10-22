@@ -40,6 +40,15 @@ export function checkFiles(paths: string[]): void {
   }
 }
 
+// A user id to ping. Discord snowflakes are 17 to 20 digits.
+export const mentionIdSchema = z.string().regex(/^\d{17,20}$/, "mention must be a user id (17 to 20 digits)");
+
+// Adds <@id> to the start of content for each id that content does not already mention.
+export function withMentions(content: string, mentions: string[]): string {
+  const missing = mentions.filter((id) => !content.includes(`<@${id}>`) && !content.includes(`<@!${id}>`));
+  return missing.map((id) => `<@${id}> `).join("") + content;
+}
+
 export const sendMessageShape = {
   channel_id: z.string().optional().describe("Channel ID. Optional if DISCORD_DEFAULT_CHANNEL_ID is set"),
   content: z.string().describe("Message text"),
@@ -57,6 +66,10 @@ export const sendMessageShape = {
     .max(MAX_FILES)
     .optional()
     .describe("Local file paths to attach. At most 10 files, each at most 10 MB"),
+  mention: z
+    .array(mentionIdSchema)
+    .optional()
+    .describe("User IDs to ping. Adds <@id> to the start of the content if it is not there yet. Only these users ping"),
 };
 
 export const sendMessageInput = z.object(sendMessageShape);
@@ -84,13 +97,15 @@ export async function sendMessage(deps: ToolDeps, input: SendMessageInput): Prom
   const channel = pickChannel(deps.config, input.channel_id);
   requireAllowed(deps.config, channel);
   if (input.content.trim() === "") throw new ToolError("bad_input", "content is empty");
-  const text = input.agent_msg ? formatAgentMsg(input.content, input.agent_msg) : input.content;
+  const body = input.mention && input.mention.length > 0 ? withMentions(input.content, input.mention) : input.content;
+  const text = input.agent_msg ? formatAgentMsg(body, input.agent_msg) : body;
   if (text.length > MAX_CONTENT) {
     throw new ToolError("too_long", `content is ${text.length} characters, max is ${MAX_CONTENT}`);
   }
   const files = input.files && input.files.length > 0 ? input.files : undefined;
   if (files) checkFiles(files);
-  return deps.discord.sendMessage(channel, text, { replyToId: input.reply_to_id, files });
+  const mentions = input.mention && input.mention.length > 0 ? input.mention : undefined;
+  return deps.discord.sendMessage(channel, text, { replyToId: input.reply_to_id, files, mentions });
 }
 
 export async function createThread(deps: ToolDeps, input: CreateThreadInput): Promise<{ id: string }> {
@@ -114,7 +129,8 @@ export function registerWriteTools(ctx: ToolContext): void {
       description:
         "Send a message to an allowed channel. Max 2000 characters. " +
         "Optional agent_msg adds agent metadata (to, thread, kind) to the message. " +
-        "Optional files lists local file paths to attach: at most 10, each at most 10 MB.",
+        "Optional files lists local file paths to attach: at most 10, each at most 10 MB. " +
+        "Optional mention lists user IDs to ping; no one else pings.",
       inputSchema: sendMessageShape,
     },
     async (args) => {

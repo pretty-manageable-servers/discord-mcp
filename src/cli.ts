@@ -203,13 +203,14 @@ export const COMMANDS: Record<string, Command> = {
     summary: "Send a message, optionally with files and agent metadata.",
     usage:
       "send [--channel <id>] (--content <text> | --content-file <path>) [--reply-to <id>] " +
-      "[--file <path>]... [--agent-to <name>] [--agent-thread <name>] [--agent-kind request|reply|note]",
+      "[--file <path>]... [--mention <userId>]... [--agent-to <name>] [--agent-thread <name>] [--agent-kind request|reply|note]",
     options: {
       ...CHANNEL,
       content: { type: "string" },
       "content-file": { type: "string" },
       "reply-to": { type: "string" },
       file: { type: "string", multiple: true },
+      mention: { type: "string", multiple: true },
       "agent-to": { type: "string" },
       "agent-thread": { type: "string" },
       "agent-kind": { type: "string" },
@@ -236,12 +237,14 @@ export const COMMANDS: Record<string, Command> = {
         ? undefined
         : { to: agentTo, thread: agentThread, kind: agentKind };
       const files = (v.file as string[] | undefined) ?? [];
+      const mentions = (v.mention as string[] | undefined) ?? [];
       const input = sendMessageInput.parse({
         channel_id: str(v.channel),
         content,
         reply_to_id: str(v["reply-to"]),
         agent_msg: agent,
         files: files.length > 0 ? files : undefined,
+        mention: mentions.length > 0 ? mentions : undefined,
       });
       const sent = await sendMessage(ctx, input);
       const json = { ...sent, url: messageUrl(sent) };

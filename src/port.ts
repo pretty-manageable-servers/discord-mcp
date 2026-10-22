@@ -7,8 +7,12 @@ export interface DiscordPort {
   listChannels(guildId: string): Promise<ChannelView[]>;
   // Returns messages oldest first.
   readMessages(channelId: string, opts: { limit: number; after?: string; before?: string }): Promise<MessageView[]>;
-  // files are local paths. Each is uploaded under its base name.
-  sendMessage(channelId: string, content: string, opts?: { replyToId?: string; files?: string[] }): Promise<MessageView>;
+  // files are local paths. Each is uploaded under its base name. mentions are user ids that may ping.
+  sendMessage(
+    channelId: string,
+    content: string,
+    opts?: { replyToId?: string; files?: string[]; mentions?: string[] },
+  ): Promise<MessageView>;
   createThread(channelId: string, name: string, messageId?: string): Promise<{ id: string }>;
   react(channelId: string, messageId: string, emoji: string): Promise<void>;
   // Returns a function that removes the listener.
