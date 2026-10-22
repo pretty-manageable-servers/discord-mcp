@@ -46,7 +46,15 @@ export class FakeDiscord implements DiscordPort {
   }
 
   // Files become attachments with the file's base name and size. No upload happens.
-  async sendMessage(channelId: string, content: string, opts?: { replyToId?: string; files?: string[] }) {
+  // Options of the last sendMessage call, so tests can check what the port was asked to do.
+  lastSendOpts: { replyToId?: string; files?: string[]; mentions?: string[] } | undefined;
+
+  async sendMessage(
+    channelId: string,
+    content: string,
+    opts?: { replyToId?: string; files?: string[]; mentions?: string[] },
+  ) {
+    this.lastSendOpts = opts;
     const attachments = (opts?.files ?? []).map((path) => {
       const name = basename(path);
       return { name, url: `https://cdn.fake/${name}`, size: statSync(path).size };

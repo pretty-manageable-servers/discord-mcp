@@ -27,6 +27,18 @@ function compareIds(a: string, b: string): number {
   return x < y ? -1 : x > y ? 1 : 0;
 }
 
+// Only the users in mentions can ping. Everything else is off: no @everyone, roles or replied-user ping,
+// except that a reply that names users also pings the replied-to author.
+export function allowedMentionsFor(opts?: { replyToId?: string; mentions?: string[] }): {
+  parse: [];
+  users: string[];
+  repliedUser?: boolean;
+} {
+  const users = opts?.mentions ?? [];
+  if (users.length > 0 && opts?.replyToId) return { parse: [], users, repliedUser: true };
+  return { parse: [], users };
+}
+
 export function toView(message: Message): MessageView {
   const channel = message.channel;
   return {
@@ -149,7 +161,7 @@ export function createDiscord(token: string, log: Logger = defaultLog): DiscordP
           content,
           reply: opts?.replyToId ? { messageReference: opts.replyToId } : undefined,
           files: opts?.files?.map((path) => ({ attachment: path, name: basename(path) })),
-          allowedMentions: { parse: [] },
+          allowedMentions: allowedMentionsFor({ replyToId: opts?.replyToId, mentions: opts?.mentions }),
         });
         return toView(sent);
       });
