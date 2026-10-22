@@ -30,6 +30,7 @@ export class FakeDiscord implements DiscordPort {
   private listeners = new Set<(m: MessageView) => void>();
   private updateListeners = new Set<(m: MessageView) => void>();
   private deleteListeners = new Set<(ref: { channelId: string; id: string }) => void>();
+  private statusListeners = new Set<(s: "reconnecting" | "ready") => void>();
   apiReads = 0;
 
   async ready() { return { botId: this.botId, botName: this.botName }; }
@@ -92,7 +93,17 @@ export class FakeDiscord implements DiscordPort {
     return () => { this.deleteListeners.delete(cb); };
   }
 
-  listenerCount() { return this.listeners.size; }
+  onStatus(cb: (s: "reconnecting" | "ready") => void) {
+    this.statusListeners.add(cb);
+    return () => { this.statusListeners.delete(cb); };
+  }
+
+  // Tell status listeners the gateway changed state.
+  setStatus(s: "reconnecting" | "ready") {
+    for (const cb of [...this.statusListeners]) cb(s);
+  }
+
+  listenerCount() { return this.listeners.size + this.updateListeners.size + this.deleteListeners.size + this.statusListeners.size; }
 
   destroyed = false;
   destroy() { this.destroyed = true; }

@@ -77,6 +77,7 @@ Output is plain text, one line per item. Add `--json` for the JSON form. Errors 
 | `react --channel <id> --message <id> --emoji <emoji>` | Add a reaction. | `reacted` |
 | `wait [--channel <id>] [--after <id>] [--from <bots\|humans\|all\|userId>]... [--to-me] [--contains <text>] [--timeout <seconds>] [--max-chars N]` | Wait for one matching message. Times out after `--timeout` seconds (default 300, max 600) with `error timeout`. | one line for the message |
 | `search [--query <text>] [--channel <id>] [--author <id>] [--since <iso>] [--until <iso>] [--limit N] [--max-chars N]` | Search the local cache only. | one line per message |
+| `watch [--channel <id>]... [--guild <id>] [--from <userId>]... [--bots-only \| --no-bots] [--contains <text>] [--events new,edit,delete] [--max-chars N] [--until-idle <seconds>] [--exit-after <count>]` | Stream new, edited and deleted messages, one line each, until stopped. See [Watching](#watching). | one line per event, plus `status` lines |
 
 Message lines look like this:
 
@@ -106,6 +107,27 @@ discord-mcp wait --channel 123 --after "$LAST" --from bots --contains pong --tim
 ```
 
 `wait` exits 0 and prints the reply. On timeout it exits 1 with `error timeout: ...`.
+
+### Watching
+
+`watch` stays connected to Discord and prints one line per event. Each line is flushed as it happens. A coding agent can run it under a log monitor, so each line becomes a notification.
+
+- `new <id> <HH:MM> UTC <author>: <text>` for a new message. Bots show `[bot]`.
+- `edit <id> ...` for an edit, with the new text. A bot's live status message is edited often, so the server prints at most one `edit` line per message every 3 seconds, with the latest text. The final text is always printed.
+- `delete <id>` for a deleted message. Only with `--events new,edit,delete`: the default is `new,edit`.
+- `status reconnecting` and `status ready` when the gateway connection drops and comes back.
+
+Without `--channel`, `watch` covers every channel in the server of `DISCORD_DEFAULT_CHANNEL_ID`. If that is not set, it covers every channel the bot can see. `--from` (repeatable) and `--bots-only` or `--no-bots` narrow the authors. `--contains` matches the text. Delete events are filtered by `--channel` only, because the gateway delete event has no author or text.
+
+`--until-idle N` exits 0 after N seconds with no event line. `--exit-after K` exits 0 after K event lines. SIGINT and SIGTERM stop it. Events go into the local cache too. With `--json`, each line is one JSON object.
+
+Agent pattern: start the watch under a monitor, then ask the other bot with a mention.
+
+```sh
+discord-mcp watch --channel 123 --from <bot id> --until-idle 3600
+# In another step, ping the bot:
+discord-mcp send --channel 123 --content "status?" --mention <bot id>
+```
 
 ## Local cache
 

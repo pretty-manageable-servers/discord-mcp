@@ -21,6 +21,9 @@ export interface DiscordPort {
   onMessageUpdate(cb: (m: MessageView) => void): () => void;
   // Deleted message. Returns a function that removes the listener.
   onMessageDelete(cb: (ref: { channelId: string; id: string }) => void): () => void;
+  // Gateway connection state after the first login: "reconnecting" when it drops, "ready" when it is back.
+  // Returns a function that removes the listener.
+  onStatus(cb: (status: "reconnecting" | "ready") => void): () => void;
   // Closes the gateway connection. The port cannot be used afterwards.
   destroy(): void;
 }

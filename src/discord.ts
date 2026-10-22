@@ -213,6 +213,28 @@ export function createDiscord(token: string, log: Logger = defaultLog): DiscordP
       };
     },
 
+    onStatus(cb) {
+      let down = false;
+      const onDrop = () => {
+        if (down) return;
+        down = true;
+        cb("reconnecting");
+      };
+      const onUp = () => {
+        if (!down) return;
+        down = false;
+        cb("ready");
+      };
+      client.on(Events.ShardDisconnect, onDrop);
+      client.on(Events.ShardResume, onUp);
+      client.on(Events.ShardReady, onUp);
+      return () => {
+        client.off(Events.ShardDisconnect, onDrop);
+        client.off(Events.ShardResume, onUp);
+        client.off(Events.ShardReady, onUp);
+      };
+    },
+
     destroy() {
       client.destroy();
     },
